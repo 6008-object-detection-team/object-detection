@@ -1,0 +1,22 @@
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# IDE and local tool state
+.idea/
+.ultralytics/
+
+# Generated build artifacts
+build/
+dist/
+
+# Local installation logs
+*.log
+
+# Personal image; keep local and do not publish
+mypicture.jpg
+

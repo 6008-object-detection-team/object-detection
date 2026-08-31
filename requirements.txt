@@ -1,0 +1,12 @@
+numpy>=1.24,<2
+opencv-python>=4.8,<5
+onnxruntime>=1.16,<2
+PySide6>=6.5,<7
+# YOLOE-11 runtime.
+ultralytics>=8.3,<9
+# CUDA 12.8 wheels for the RTX 50-series GPU. Use CPU wheels on machines without NVIDIA CUDA.
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch>=2.9
+torchvision>=0.24
+# Do not replace with PyPI's unrelated clipboard-manager package named "clip".
+git+https://github.com/ultralytics/CLIP.git
