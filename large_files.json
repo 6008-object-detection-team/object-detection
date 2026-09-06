@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": "build/app/AIDetectionApp.pkg",
+      "size": 3406349084,
+      "sha256": "6c445e9c799fcdc1cb653bff6b12e89e1692f500a1059906671471cb69d3a159",
+      "parts": [
+        {
+          "path": "build/app/AIDetectionApp.pkg.part001",
+          "size": 1073741824,
+          "sha256": "7c8a32f8567caea64a23508cd13e07d769c9862c8b8b9df2c445868d0f1b1a46"
+        },
+        {
+          "path": "build/app/AIDetectionApp.pkg.part002",
+          "size": 1073741824,
+          "sha256": "91ba2d4a1d9be3cba71c0d6acaf529b7bed6d4ec0ad426f010db7d4118040685"
+        },
+        {
+          "path": "build/app/AIDetectionApp.pkg.part003",
+          "size": 1073741824,
+          "sha256": "8855c938f0c725982790c476e57492bd0c2ab8f461c43e62eaa114bd79eab27c"
+        },
+        {
+          "path": "build/app/AIDetectionApp.pkg.part004",
+          "size": 185123612,
+          "sha256": "bacef9ebae1d535f4fc14428a614a6446ffada7418b223a340f5f313a2522585"
+        }
+      ]
+    }
+  ]
+}

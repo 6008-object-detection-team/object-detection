@@ -2,17 +2,41 @@
 
 基于 PySide6、Ultralytics YOLOE 和 PyTorch 的桌面检测应用，支持摄像头与本地视频。当前版本重点改善摄像头小目标检测和暗光处理。
 
-## 启动
+## 下载与配置环境
 
-Windows 双击 **run_app.bat**，或在项目目录执行：
+先安装 Git（包含 Git LFS）和 Python 3.11 / Miniconda，然后执行：
 
 ~~~powershell
-& "D:\anaconda3\envs\pytorch\python.exe" main.py
+git lfs install
+git clone https://github.com/6008-object-detection-team/object-detection.git
+cd object-detection
+git lfs pull
+conda create -n object-detection python=3.11 -y
+conda activate object-detection
+python -m pip install -r requirements.txt
+python check_environment.py
+python main.py
 ~~~
 
-脚本使用本机已经安装的 pytorch Conda 环境；其他机器需要修改解释器路径，或激活自己的环境后执行 python main.py。安装依赖使用该环境的 python -m pip install -r requirements.txt。
+模型使用 Git LFS 保存，必须下载实际权重；网页中的小型文本指针不是模型。建议使用以上 Git 命令下载，GitHub 的 Download ZIP 默认可能只有模型指针。环境安装需要网络；四种 YOLOE 模型和两种文本编码器均已包含，下载完整后加载这些模型不需要再次下载权重。完整文件约 5 GB，包含历史打包中间文件。
 
-**当前入口是 main.py。** add picture.py 是旧 ONNX 版本，dist/AIDetectionApp.exe 是已有的旧打包文件，都不包含本次改进。
+Windows 也可以在已激活的环境中执行 **run_app.bat**。脚本优先使用 `OBJECT_DETECTION_PYTHON` 指定的解释器、当前虚拟环境/Conda 环境或项目 `.venv`；本机原有环境仍作为回退，最后尝试 PATH 中的 Python。组员无需修改代码里的盘符路径。`run_app.bat --check` 只检查环境和模型文件。
+
+依赖文件包含 CUDA 12.8 的 PyTorch 下载源；没有 NVIDIA 显卡时应用会使用 CPU。摄像头权限、驱动和推理速度取决于各自设备。当前已验证的环境是 Windows、Python 3.11.15、PyTorch 2.9.1+cu128、Ultralytics 8.4.126。
+
+**当前入口是 main.py。** add picture.py 是旧 ONNX 版本；build 中是历史打包中间文件，不包含后续改进，运行源码不依赖它们。
+
+## 完整文件与大文件还原
+
+仓库包含源码、全部现有模型、文档、示例图片、验证结果、安装日志、IDE 配置、缓存和 build 中间文件。本地 `.git` 历史及认证数据不上传；虚拟环境和 `.env` 凭据文件也不纳入版本控制。
+
+`build/app/AIDetectionApp.pkg` 原文件为 3,406,349,084 字节，超过 [GitHub Free/Pro 的 Git LFS 单文件 2 GB 限制](https://docs.github.com/en/repositories/working-with-files/managing-large-files/about-git-large-file-storage)，因此无损拆分为相邻的四个 `.part001`–`.part004` 文件。`large_files.json` 记录每个分片及原文件的 SHA-256。需要完整恢复历史 build 目录时执行：
+
+~~~powershell
+python restore_large_files.py
+~~~
+
+该命令只使用 Python 标准库，校验分片后恢复原文件；若同名原文件已有不同内容，会停止并保留已有文件。`python restore_large_files.py --check` 只做完整性校验。运行检测应用不需要还原这个历史打包文件。
 
 ## 摄像头小目标设置
 
@@ -60,16 +84,17 @@ Windows 双击 **run_app.bat**，或在项目目录执行：
 
 - yoloe-26l-seg.pt
 - yoloe-26x-seg.pt
+- yoloe-26s-seg.pt
 - mobileclip2_b.ts（新版文本编码器）
 - 原有 yoloe-11l-seg.pt 与 mobileclip_blt.ts 保留
 
-26S 在首次加载时由 Ultralytics 下载。新版要求 ultralytics>=8.4.126,<9；本机验证版本为 8.4.126。文本提示词继续使用官方 ultralytics/CLIP 依赖。启动脚本会切换到项目目录，避免重复下载文本编码器。
+26S 也已包含在仓库中。新版要求 ultralytics>=8.4.126,<9；本机验证版本为 8.4.126。文本提示词继续使用官方 ultralytics/CLIP 依赖。启动脚本会切换到项目目录，避免重复下载文本编码器。
 
 ## 验证与限制
 
 ~~~powershell
-& "D:\anaconda3\envs\pytorch\python.exe" -m unittest -v test_detection
-& "D:\anaconda3\envs\pytorch\python.exe" validate_improvements.py
+python -m unittest -v test_detection
+python validate_improvements.py
 ~~~
 
 回归测试覆盖正常光照不变、暗部提亮与颜色保持、噪声、补检去重、原图结果保留、分块坐标、模型切换、视频异常释放和实时设置。
