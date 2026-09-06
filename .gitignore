@@ -20,3 +20,18 @@ dist/
 # Personal image; keep local and do not publish
 mypicture.jpg
 
+# Generated document previews and local video smoke tests
+docx_render/
+docx_render_en/
+validation/*.avi
+validation/*.mp4
+
+# Preserve the concise validation evidence alongside the report
+!validation/validation_run.log
+!validation/camera_check.log
+
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+

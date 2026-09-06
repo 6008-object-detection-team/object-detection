@@ -1,0 +1,8 @@
+load: SUCCESS
+camera_frame 0 resolution 1280 720 ms 71.1 boxes 2
+camera_frame 1 resolution 1280 720 ms 48.4 boxes 1
+camera_frame 2 resolution 1280 720 ms 43.9 boxes 1
+camera_frame 3 resolution 1280 720 ms 45.8 boxes 1
+camera_frame 4 resolution 1280 720 ms 44.0 boxes 1
+camera_frame 5 resolution 1280 720 ms 43.2 boxes 1
+Camera released; no camera image saved.
