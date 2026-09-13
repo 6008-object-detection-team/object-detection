@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# Optional comparison backend. The model weights are downloaded on first use.
+transformers>=5.17,<6
+safetensors>=0.4,<1

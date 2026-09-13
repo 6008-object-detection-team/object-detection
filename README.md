@@ -90,6 +90,25 @@ python restore_large_files.py
 
 26S 也已包含在仓库中。新版要求 ultralytics>=8.4.126,<9；本机验证版本为 8.4.126。文本提示词继续使用官方 ultralytics/CLIP 依赖。启动脚本会切换到项目目录，避免重复下载文本编码器。
 
+### Grounding DINO Tiny 对照后端（可选）
+
+项目界面的模型列表已加入 **Grounding DINO Tiny（开放词汇对照）**。首次使用前执行：
+
+~~~powershell
+python -m pip install -r requirements-grounding-dino.txt
+python main.py
+~~~
+
+然后选择该模型并点击“应用设置 / 加载模型”。首次加载会从 Hugging Face 下载 `IDEA-Research/grounding-dino-tiny`，并缓存到项目的 `.model_cache/huggingface`（已忽略，不提交到 Git）。Grounding DINO 使用官方自适应图像预处理，因此界面的 640/960/1280 推理尺寸只对 YOLOE 生效；置信度和 IoU、分块补检、暗光处理、视频线程及绘图功能均复用现有流程。
+
+可运行以下脚本，在相同图片、提示词、置信度和 IoU 下生成 YOLOE-26S 与 Grounding DINO Tiny 的预览对比：
+
+~~~powershell
+python compare_grounding_dino.py
+~~~
+
+结果保存在 `validation/grounding_dino_preview`。脚本先预热，再统计 5 次推理的中位延迟和 P95 延迟。该预览没有人工标注，因此检测框数和模型置信度只能用于检查接入效果，不能作为准确率、召回率或 mAP；论文级量化对比仍需建立同一套标注测试集。
+
 ## 验证与限制
 
 ~~~powershell

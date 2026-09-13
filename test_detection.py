@@ -10,7 +10,7 @@ import numpy as np
 
 from detection_utils import Detection, merge_supplementary
 from enhancement import AdaptiveLowLightEngine
-from engines import OpenVocabEngine
+from engines import GroundingDinoEngine, OpenVocabEngine
 
 
 class EnhancementTests(unittest.TestCase):
@@ -53,6 +53,12 @@ class EnhancementTests(unittest.TestCase):
 
 
 class FusionTests(unittest.TestCase):
+    def test_grounding_dino_phrase_maps_back_to_user_prompt(self):
+        classes = ["person", "mobile phone", "red backpack"]
+        self.assertEqual(GroundingDinoEngine._label_to_class_id("a mobile phone", classes), 1)
+        self.assertEqual(GroundingDinoEngine._label_to_class_id("red backpack", classes), 2)
+        self.assertEqual(GroundingDinoEngine._label_to_class_id("unknown object", classes), -1)
+
     def test_original_box_and_confidence_survive_all_extra_predictions(self):
         original = Detection((10, 10, 40, 50), 0.51, 0, "bottle")
         higher_score = replace(original, score=0.98, source="enhanced")

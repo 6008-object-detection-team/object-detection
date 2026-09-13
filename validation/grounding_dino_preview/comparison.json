@@ -1,0 +1,166 @@
+{
+  "notice": "Unlabelled preview only: counts and confidence are not accuracy, recall, or mAP.",
+  "device": "NVIDIA GeForce RTX 3060 Laptop GPU",
+  "confidence": 0.25,
+  "iou": 0.45,
+  "models": [
+    {
+      "model": "yoloe_26s",
+      "load_seconds": 0.5,
+      "cases": [
+        {
+          "case": "sunflowers",
+          "image": "OIF.jpg",
+          "image_size": [
+            474,
+            356
+          ],
+          "prompts": [
+            "sunflower",
+            "leaf"
+          ],
+          "detections": 3,
+          "labels": [
+            "sunflower",
+            "sunflower",
+            "sunflower"
+          ],
+          "scores": [
+            0.5407,
+            0.3131,
+            0.2863
+          ],
+          "latency_ms_median": 28.2,
+          "latency_ms_p95": 49.85,
+          "measured_runs": 5
+        },
+        {
+          "case": "portrait",
+          "image": "mypicture.jpg",
+          "image_size": [
+            1428,
+            1832
+          ],
+          "prompts": [
+            "person",
+            "face",
+            "black shirt"
+          ],
+          "detections": 2,
+          "labels": [
+            "person",
+            "black shirt"
+          ],
+          "scores": [
+            0.8773,
+            0.4145
+          ],
+          "latency_ms_median": 26.69,
+          "latency_ms_p95": 27.71,
+          "measured_runs": 5
+        }
+      ]
+    },
+    {
+      "model": "grounding_dino_tiny",
+      "load_seconds": 4.04,
+      "cases": [
+        {
+          "case": "sunflowers",
+          "image": "OIF.jpg",
+          "image_size": [
+            474,
+            356
+          ],
+          "prompts": [
+            "sunflower",
+            "leaf"
+          ],
+          "detections": 24,
+          "labels": [
+            "sunflower",
+            "sunflower",
+            "sunflower",
+            "sunflower",
+            "sunflower",
+            "sunflower",
+            "sunflower",
+            "sunflower",
+            "sunflower",
+            "sunflower",
+            "sunflower",
+            "sunflower",
+            "sunflower",
+            "sunflower",
+            "sunflower",
+            "sunflower",
+            "sunflower",
+            "sunflower",
+            "sunflower",
+            "sunflower",
+            "leaf",
+            "leaf",
+            "sunflower",
+            "leaf"
+          ],
+          "scores": [
+            0.6772,
+            0.6571,
+            0.6414,
+            0.6271,
+            0.6133,
+            0.5924,
+            0.5521,
+            0.54,
+            0.4745,
+            0.4738,
+            0.4276,
+            0.4122,
+            0.4072,
+            0.3843,
+            0.3812,
+            0.3774,
+            0.3714,
+            0.3704,
+            0.3674,
+            0.367,
+            0.3091,
+            0.2887,
+            0.2669,
+            0.262
+          ],
+          "latency_ms_median": 400.23,
+          "latency_ms_p95": 405.32,
+          "measured_runs": 5
+        },
+        {
+          "case": "portrait",
+          "image": "mypicture.jpg",
+          "image_size": [
+            1428,
+            1832
+          ],
+          "prompts": [
+            "person",
+            "face",
+            "black shirt"
+          ],
+          "detections": 3,
+          "labels": [
+            "black shirt",
+            "person",
+            "face"
+          ],
+          "scores": [
+            0.9103,
+            0.8022,
+            0.6945
+          ],
+          "latency_ms_median": 398.3,
+          "latency_ms_p95": 403.83,
+          "measured_runs": 5
+        }
+      ]
+    }
+  ]
+}

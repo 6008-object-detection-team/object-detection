@@ -14,7 +14,7 @@ from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox
 
 from app_utils import parse_prompts
-from engines import OpenVocabEngine
+from engines import GroundingDinoEngine, OpenVocabEngine
 from enhancement import AdaptiveLowLightEngine
 from ui import build_ui
 from video_worker import VideoWorker
@@ -24,10 +24,11 @@ class AIApp(QMainWindow):
     """Coordinates the UI with model loading, video input, and inference."""
 
     MODELS = {
-        "YOLOE-26L（实时推荐）": "yoloe-26l-seg.pt",
-        "YOLOE-26X（精度优先，较慢）": "yoloe-26x-seg.pt",
-        "YOLOE-26S（速度优先）": "yoloe-26s-seg.pt",
-        "YOLOE-11L（旧模型对照）": "yoloe-11l-seg.pt",
+        "YOLOE-26L（实时推荐）": ("yoloe", "yoloe-26l-seg.pt"),
+        "YOLOE-26X（精度优先，较慢）": ("yoloe", "yoloe-26x-seg.pt"),
+        "YOLOE-26S（速度优先）": ("yoloe", "yoloe-26s-seg.pt"),
+        "YOLOE-11L（旧模型对照）": ("yoloe", "yoloe-11l-seg.pt"),
+        "Grounding DINO Tiny（开放词汇对照）": ("grounding_dino", GroundingDinoEngine.MODEL_ID),
     }
 
     def __init__(self):
@@ -56,17 +57,28 @@ class AIApp(QMainWindow):
     def apply_settings(self):
         if not self.stop_video_stream():
             return
-        model_path = self.MODELS[self.model_combo.currentText()]
+        backend, model_path = self.MODELS[self.model_combo.currentText()]
         device = self.device_combo.currentText()
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
+            engine_type = GroundingDinoEngine if backend == "grounding_dino" else OpenVocabEngine
+            if not isinstance(self.engine, engine_type) or type(self.engine) is not engine_type:
+                old_engine, self.engine = self.engine, engine_type()
+                del old_engine
+                import gc
+                import torch
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
             status = self.engine.load_model(model_path, device)
         finally:
             QApplication.restoreOverrideCursor()
 
         if status == "SUCCESS":
             self.engine.imgsz = self.resolution_combo.currentData()
-            QMessageBox.information(self, "设置已应用", f"模型已加载：{model_path}\n推理尺寸：{self.engine.imgsz}\n暗光增强无需额外模型文件。")
+            size_note = ("Grounding DINO 使用官方自适应预处理尺寸，界面的推理尺寸选项仅对 YOLOE 生效。"
+                         if backend == "grounding_dino" else f"推理尺寸：{self.engine.imgsz}")
+            QMessageBox.information(self, "设置已应用", f"模型已加载：{model_path}\n{size_note}\n暗光增强无需额外模型文件。")
         elif status == "CUDA_UNAVAILABLE":
             QMessageBox.warning(self, "CUDA 不可用", "当前 PyTorch 无法使用 CUDA，请先选择 CPU，或重新安装 CUDA 版 PyTorch。")
         else:

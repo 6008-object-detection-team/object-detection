@@ -3,12 +3,13 @@
 .venv/
 venv/
 env/
+__pycache__/
 .env
 .env.*
 !.env.example
+.model_cache/
 
 # This 3.4 GB file is stored losslessly as adjacent Git LFS parts.
 # Run python restore_large_files.py to restore its original name and contents.
 /build/app/AIDetectionApp.pkg
 *.restoring
-

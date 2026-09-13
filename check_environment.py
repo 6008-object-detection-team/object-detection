@@ -23,6 +23,15 @@ def main():
             print(f"OK {name}: {getattr(module, '__version__', 'installed')}")
         except Exception as exc:
             errors.append(f"{name}: {exc}")
+    try:
+        transformers = importlib.import_module("transformers")
+        importlib.import_module("safetensors")
+        print(f"OK optional Grounding DINO dependencies: transformers {transformers.__version__}")
+        cache = ROOT / ".model_cache" / "huggingface" / "models--IDEA-Research--grounding-dino-tiny"
+        print("OK Grounding DINO Tiny cache: downloaded" if cache.is_dir()
+              else "INFO Grounding DINO Tiny weights will download on first use")
+    except Exception:
+        print("INFO Grounding DINO Tiny is optional; install requirements-grounding-dino.txt to enable it")
     for name in ("yoloe-11l-seg.pt", "yoloe-26s-seg.pt", "yoloe-26l-seg.pt",
                  "yoloe-26x-seg.pt", "mobileclip_blt.ts", "mobileclip2_b.ts"):
         path = ROOT / name
