@@ -29,12 +29,29 @@ Pan Deng added; it does not modify anything else in the repo.
 
 ## Results
 
+Headline numbers:
+
 | Model | mAP@[.5:.95] | mAP@.5 | ms/image | Detections |
 | --- | ---: | ---: | ---: | ---: |
 | YOLOE-26L | **0.473** | 0.702 | 67 | 3,475 |
 | YOLOE-26S | 0.418 | 0.638 | 35 | 3,592 |
 | Grounding DINO Tiny (threshold 0.05) | 0.132 | 0.176 | 378 | 40,754 |
 | Grounding DINO Tiny (threshold 0.35, its own default) | 0.414 | 0.544 | 306 | 2,574 |
+
+Full COCOeval breakdown — AP/AR by IoU strictness and by object size. AP@.75 needs a
+tighter box match than AP@.5; AP/AR split by size matters most for this app, since
+several of its demo prompts (backpack, cell phone, cup) are exactly the kind of small
+object that a coarse detector tends to miss:
+
+| Model | AP@.75 | AP small | AP medium | AP large | AR@100 | AR small | AR medium | AR large |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| YOLOE-26L | **0.492** | **0.329** | **0.560** | **0.659** | **0.585** | **0.417** | **0.667** | **0.762** |
+| YOLOE-26S | 0.434 | 0.230 | 0.529 | 0.583 | 0.534 | 0.321 | 0.636 | 0.704 |
+| DINO Tiny (0.05) | 0.141 | 0.121 | 0.171 | 0.214 | 0.290 | 0.246 | 0.326 | 0.377 |
+| DINO Tiny (0.35) | 0.448 | 0.259 | 0.490 | 0.620 | 0.538 | 0.360 | 0.599 | 0.740 |
+
+(`AP`/`AR small|medium|large` follow COCO's own area buckets: small <32², medium
+32²–96², large >96² pixels.)
 
 ## What this shows
 
@@ -51,6 +68,11 @@ Pan Deng added; it does not modify anything else in the repo.
   only, no ground truth) could not have surfaced this: raw box counts alone made
   Grounding DINO look like it was finding *more* objects, when most of the extra boxes
   at a low threshold are false positives.
+- **Small objects are the hardest case for all three configurations**, and by the
+  widest margin: YOLOE-26L's AP_small (0.329) is roughly half its AP_large (0.659), and
+  every model loses more ground on small-object AP than on any other split. That matters
+  specifically for this app, since prompts like "backpack", "cell phone" and "cup" are
+  usually small in frame — it's the scenario the small-object tiling feature exists for.
 
 ## Limits
 
