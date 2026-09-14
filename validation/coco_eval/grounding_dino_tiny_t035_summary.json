@@ -1,0 +1,19 @@
+{
+  "confidence_threshold": 0.35,
+  "detections": 2574,
+  "ms_per_image": 305.8,
+  "metrics": {
+    "AP@[.5:.95]": 0.4138,
+    "AP@.5": 0.5436,
+    "AP@.75": 0.4478,
+    "AP_small": 0.2587,
+    "AP_medium": 0.49,
+    "AP_large": 0.6198,
+    "AR@1": 0.3472,
+    "AR@10": 0.5299,
+    "AR@100": 0.5377,
+    "AR_small": 0.3597,
+    "AR_medium": 0.5991,
+    "AR_large": 0.7399
+  }
+}

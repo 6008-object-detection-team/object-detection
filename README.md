@@ -107,7 +107,22 @@ python main.py
 python compare_grounding_dino.py
 ~~~
 
-结果保存在 `validation/grounding_dino_preview`。脚本先预热，再统计 5 次推理的中位延迟和 P95 延迟。该预览没有人工标注，因此检测框数和模型置信度只能用于检查接入效果，不能作为准确率、召回率或 mAP；论文级量化对比仍需建立同一套标注测试集。
+结果保存在 `validation/grounding_dino_preview`。脚本先预热，再统计 5 次推理的中位延迟和 P95 延迟。该预览没有人工标注，因此检测框数和模型置信度只能用于检查接入效果，不能作为准确率、召回率或 mAP。
+
+### 有标注的量化对比（COCO 子集）
+
+上面的预览脚本没有真值标注，无法说明谁更准。下面这一套用的是 COCO val2017 的真实标注和标准 `pycocotools` 评测口径（mAP@[.5:.95]、mAP@.5、AR），可以直接和公开基准或其他组的报告对照：
+
+~~~powershell
+python -m pip install -r requirements-grounding-dino.txt
+python -m pip install -r requirements-eval.txt
+python download_coco_subset.py --annotations path\to\instances_val2017.json
+python evaluate_detectors.py
+~~~
+
+`download_coco_subset.py` 只下载包含目标类别的约 240 张图片（不是完整 5000 张验证集），需要先从 [COCO 官网](https://cocodataset.org/#download) 下载 `annotations_trainval2017.zip` 并解压出 `instances_val2017.json`。子集图片和完整标注保存在 `coco_eval/`（已加入 `.gitignore`，不提交），可复现的评测报告在 `validation/coco_eval/report.json`，方法说明和结果表见 `validation/coco_eval/README.md`。
+
+结论摘要：这十个类别上 YOLOE-26L 精度最高（mAP@[.5:.95] 0.473），YOLOE-26S 其次（0.418）；Grounding DINO Tiny 对置信度阈值非常敏感——0.05 阈值下会输出大量重复低分框，mAP 只有 0.132，换成官方默认阈值 0.35 后升到 0.414，和 YOLOE-26S 基本持平，但每张图推理耗时约为其 9 倍。
 
 ## 验证与限制
 

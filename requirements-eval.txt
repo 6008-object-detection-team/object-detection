@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Ground-truth scoring for evaluate_detectors.py (mAP via pycocotools COCOeval).
+pycocotools>=2.0,<3
