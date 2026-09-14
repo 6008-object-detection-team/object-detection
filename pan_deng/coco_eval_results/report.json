@@ -19,8 +19,8 @@
   "models": {
     "yoloe_26l": {
       "detections": 3475,
-      "inference_seconds_total": 16.0,
-      "ms_per_image": 66.7,
+      "inference_seconds_total": 17.0,
+      "ms_per_image": 70.7,
       "metrics": {
         "AP@[.5:.95]": 0.4734,
         "AP@.5": 0.7016,
@@ -38,8 +38,8 @@
     },
     "yoloe_26s": {
       "detections": 3592,
-      "inference_seconds_total": 8.3,
-      "ms_per_image": 34.5,
+      "inference_seconds_total": 7.5,
+      "ms_per_image": 31.1,
       "metrics": {
         "AP@[.5:.95]": 0.4184,
         "AP@.5": 0.6385,
@@ -57,8 +57,8 @@
     },
     "grounding_dino_tiny": {
       "detections": 40754,
-      "inference_seconds_total": 90.6,
-      "ms_per_image": 377.7,
+      "inference_seconds_total": 85.5,
+      "ms_per_image": 356.3,
       "metrics": {
         "AP@[.5:.95]": 0.1318,
         "AP@.5": 0.1757,

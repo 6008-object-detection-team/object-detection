@@ -5,15 +5,16 @@ scores detections against real COCO ground-truth boxes with pycocotools, the sam
 COCOeval tooling and metric definitions (mAP@0.5, mAP@0.5:0.95, AR) used in standard
 object-detection benchmarks.
 
-Requires coco_eval/instances_subset.json and coco_eval/images/, produced by
+Requires coco_eval_data/instances_subset.json and coco_eval_data/images/, produced by
 download_coco_subset.py.
 
 Usage:
-    python evaluate_detectors.py
+    python pan_deng/evaluate_detectors.py
 """
 import contextlib
 import io
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -23,12 +24,15 @@ import torch
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 
-from engines import GroundingDinoEngine, OpenVocabEngine
-
 ROOT = Path(__file__).resolve().parent
-SUBSET_ANNOTATIONS = ROOT / "coco_eval" / "instances_subset.json"
-IMAGES_DIR = ROOT / "coco_eval" / "images"
-OUTPUT_DIR = ROOT / "validation" / "coco_eval"
+REPO_ROOT = ROOT.parent  # engines.py and the yoloe-*.pt weights live at the repo root.
+sys.path.insert(0, str(REPO_ROOT))
+
+from engines import GroundingDinoEngine, OpenVocabEngine  # noqa: E402
+
+SUBSET_ANNOTATIONS = ROOT / "coco_eval_data" / "instances_subset.json"
+IMAGES_DIR = ROOT / "coco_eval_data" / "images"
+OUTPUT_DIR = ROOT / "coco_eval_results"
 
 CONFIDENCE = 0.05  # Low on purpose: COCOeval sweeps score thresholds itself; a high
                     # cutoff here would silently cap recall before mAP is computed.
@@ -37,8 +41,8 @@ IOU = 0.45
 # Each engine is asked for exactly these COCO class names as its text prompt, so
 # every predicted box can be mapped back to a COCO category id.
 MODELS = [
-    ("yoloe_26l", OpenVocabEngine, str(ROOT / "yoloe-26l-seg.pt")),
-    ("yoloe_26s", OpenVocabEngine, str(ROOT / "yoloe-26s-seg.pt")),
+    ("yoloe_26l", OpenVocabEngine, str(REPO_ROOT / "yoloe-26l-seg.pt")),
+    ("yoloe_26s", OpenVocabEngine, str(REPO_ROOT / "yoloe-26s-seg.pt")),
     ("grounding_dino_tiny", GroundingDinoEngine, GroundingDinoEngine.MODEL_ID),
 ]
 
@@ -114,7 +118,7 @@ def summarize(coco, results, image_ids):
 def main():
     if not SUBSET_ANNOTATIONS.exists():
         raise SystemExit(
-            "coco_eval/instances_subset.json not found. Run download_coco_subset.py first."
+            "coco_eval_data/instances_subset.json not found. Run download_coco_subset.py first."
         )
     coco = COCO(str(SUBSET_ANNOTATIONS))
     categories = coco.loadCats(coco.getCatIds())

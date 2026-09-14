@@ -9,9 +9,9 @@ __pycache__/
 !.env.example
 .model_cache/
 
-# Downloaded COCO subset for evaluate_detectors.py: regenerate with
-# download_coco_subset.py rather than committing images/annotations.
-/coco_eval/
+# Downloaded COCO subset for pan_deng/evaluate_detectors.py: regenerate with
+# pan_deng/download_coco_subset.py rather than committing images/annotations.
+/pan_deng/coco_eval_data/
 
 # This 3.4 GB file is stored losslessly as adjacent Git LFS parts.
 # Run python restore_large_files.py to restore its original name and contents.

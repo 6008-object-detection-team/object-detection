@@ -5,7 +5,7 @@ MAX_IMAGES. Images are fetched individually from the official COCO image server,
 this never downloads the full 5,000-image validation split or its ~19 GB of images.
 
 Usage:
-    python download_coco_subset.py --annotations path/to/instances_val2017.json
+    python pan_deng/download_coco_subset.py --annotations path/to/instances_val2017.json
 """
 import argparse
 import json
@@ -14,7 +14,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-OUT_DIR = ROOT / "coco_eval"
+OUT_DIR = ROOT / "coco_eval_data"
 IMAGES_DIR = OUT_DIR / "images"
 SUBSET_ANNOTATIONS = OUT_DIR / "instances_subset.json"
 

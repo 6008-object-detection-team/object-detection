@@ -1,14 +1,16 @@
 # Quantitative comparison: YOLOE vs. Grounding DINO Tiny
 
 First labelled accuracy evaluation for this project. Earlier validation runs (see
-`../grounding_dino_preview/` and the rest of `../`) checked that things work and how
-fast they run; this one scores real detections against real ground-truth boxes.
+`../../validation/grounding_dino_preview/` and the rest of `../../validation/`) checked
+that things work and how fast they run; this one scores real detections against real
+ground-truth boxes. This folder (`pan_deng/`) holds the evaluation tooling and results
+Pan Deng added; it does not modify anything else in the repo.
 
 ## Method
 
 - **Data**: 240 images from COCO val2017, selected (round-robin, not just the first N)
   so all ten target classes are represented, with their official instance annotations.
-  Not the full 5,000-image split — see `download_coco_subset.py`.
+  Not the full 5,000-image split — see `../download_coco_subset.py`.
 - **Classes**: `person, bicycle, car, dog, backpack, bottle, cup, chair, laptop,
   cell phone` — ten common COCO categories, chosen to overlap with the app's own demo
   prompts. This is *not* a test of either model's full open-vocabulary range, only of
@@ -22,7 +24,7 @@ fast they run; this one scores real detections against real ground-truth boxes.
   precision-recall sweep, not a hard operating cutoff). Grounding DINO Tiny was run at
   **both** 0.05 and its own documented default of 0.35 — see Results below for why that
   distinction turned out to matter.
-- Run with `evaluate_detectors.py`; full per-detection output kept alongside
+- Run with `../evaluate_detectors.py`; full per-detection output kept alongside
   `report.json` for auditability.
 
 ## Results
@@ -45,7 +47,7 @@ fast they run; this one scores real detections against real ground-truth boxes.
   own documented default (0.35) it produces a plausible number of boxes and its
   mAP@[.5:.95] (0.414) lands close to YOLOE-26S (0.418), i.e. roughly comparable
   accuracy, at about 9× the latency.
-- This is why `compare_grounding_dino.py`'s unlabelled preview (box counts and scores
+- This is why `../../compare_grounding_dino.py`'s unlabelled preview (box counts and scores
   only, no ground truth) could not have surfaced this: raw box counts alone made
   Grounding DINO look like it was finding *more* objects, when most of the extra boxes
   at a low threshold are false positives.
