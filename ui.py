@@ -71,7 +71,7 @@ class DrawableLabel(QLabel):
 
 
 def _video_label():
-    label = QLabel("视频画面预览")
+    label = QLabel("输入画面预览")
     label.setAlignment(Qt.AlignCenter)
     label.setStyleSheet("background:black; color:white;")
     return label
@@ -89,9 +89,26 @@ def build_ui(app):
     app.model_combo = QComboBox()
     app.model_combo.addItems(list(app.MODELS))
     app.device_combo = QComboBox(); app.device_combo.addItems(["CPU", "CUDA"])
-    app.source_combo = QComboBox(); app.source_combo.addItems(["本地摄像头 (Camera 0)", "本地视频文件 (MP4/AVI)"])
+    app.source_combo = QComboBox()
+    for title, kind in [
+        ("本地摄像头 (Camera 0)", "camera"),
+        ("本地视频文件 (MP4/AVI)", "video"),
+        ("单张图片 (JPG/PNG)", "image"),
+        ("图片文件夹", "image_folder"),
+    ]:
+        app.source_combo.addItem(title, kind)
     app.source_combo.currentIndexChanged.connect(app.on_source_changed)
-    app.file_path_label = QLabel("未选择视频文件"); app.file_path_label.setWordWrap(True); app.file_path_label.hide()
+    app.file_path_label = QLabel("未选择文件"); app.file_path_label.setWordWrap(True); app.file_path_label.hide()
+    app.image_navigation = QWidget()
+    image_navigation_layout = QHBoxLayout(app.image_navigation)
+    image_navigation_layout.setContentsMargins(0, 0, 0, 0)
+    app.previous_image_button = QPushButton("← 上一张"); app.previous_image_button.clicked.connect(app.previous_image)
+    app.image_position_label = QLabel("0 / 0"); app.image_position_label.setAlignment(Qt.AlignCenter)
+    app.next_image_button = QPushButton("下一张 →"); app.next_image_button.clicked.connect(app.next_image)
+    image_navigation_layout.addWidget(app.previous_image_button)
+    image_navigation_layout.addWidget(app.image_position_label, 1)
+    image_navigation_layout.addWidget(app.next_image_button)
+    app.image_navigation.hide()
     app.conf_slider = QSlider(Qt.Horizontal); app.conf_slider.setRange(1, 100); app.conf_slider.setValue(40)
     app.conf_value = QLabel("0.40")
     app.resolution_combo = QComboBox()
@@ -107,12 +124,12 @@ def build_ui(app):
     app.strength_slider = QSlider(Qt.Horizontal); app.strength_slider.setRange(0, 100); app.strength_slider.setValue(65)
     app.strength_value = QLabel("65%")
     apply_button = QPushButton("应用设置 / 加载模型"); apply_button.clicked.connect(app.apply_settings)
-    for title, widget in [("检测模型:", app.model_combo), ("运行设备:", app.device_combo), ("推理分辨率:", app.resolution_combo), ("", app.tile_checkbox), ("视频输入源:", app.source_combo), ("", app.file_path_label), ("置信度阈值（筛选门槛）:", app.conf_value), ("", app.conf_slider), ("", app.dce_checkbox), ("暗光处理方式:", app.dark_mode_combo), ("增强强度:", app.strength_value), ("", app.strength_slider), ("", apply_button)]:
+    for title, widget in [("检测模型:", app.model_combo), ("运行设备:", app.device_combo), ("推理分辨率:", app.resolution_combo), ("", app.tile_checkbox), ("输入源：", app.source_combo), ("", app.file_path_label), ("", app.image_navigation), ("置信度阈值（筛选门槛）:", app.conf_value), ("", app.conf_slider), ("", app.dce_checkbox), ("暗光处理方式:", app.dark_mode_combo), ("增强强度:", app.strength_value), ("", app.strength_slider), ("", apply_button)]:
         if title: left.addWidget(QLabel(title))
         left.addWidget(widget)
     for signal in [app.conf_slider.valueChanged, app.resolution_combo.currentIndexChanged, app.tile_checkbox.stateChanged, app.dark_mode_combo.currentIndexChanged, app.strength_slider.valueChanged]:
         signal.connect(app.update_detection_options)
-    hint = QLabel("小物体建议先用 26L + 960；漏检时提高至 1280 或开启分块。\n暗光补检保留原图结果，正常亮度自动跳过增强。")
+    hint = QLabel("小物体建议先用 26L + 960；漏检时提高至 1280 或开启分块。\n支持摄像头、视频、单张图片和图片文件夹。\nByteTrack 自动保持 person1、person2 等同类目标编号。")
     hint.setWordWrap(True); left.addWidget(hint)
     left.addStretch(); root.addWidget(settings)
 

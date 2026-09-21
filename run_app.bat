@@ -10,6 +10,8 @@ if defined OBJECT_DETECTION_PYTHON (
     set "APP_PYTHON=%CONDA_PREFIX%\python.exe"
 ) else if exist "%~dp0.venv\Scripts\python.exe" (
     set "APP_PYTHON=%~dp0.venv\Scripts\python.exe"
+) else if exist "E:\env\envs\6008\python.exe" (
+    set "APP_PYTHON=E:\env\envs\6008\python.exe"
 ) else if exist "D:\anaconda3\envs\pytorch\python.exe" (
     set "APP_PYTHON=D:\anaconda3\envs\pytorch\python.exe"
 ) else (

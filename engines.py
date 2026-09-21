@@ -98,9 +98,13 @@ class OpenVocabEngine:
         return detections
 
     def process_frame(self, frame, conf=0.4, iou=0.45, class_names=None, visual_template=None,
-                      enhancer=None, enhancement_strength=0.65, supplement_dark=True, tiled=False):
+                      enhancer=None, enhancement_strength=0.65, supplement_dark=True, tiled=False,
+                      tracker=None):
         """Always detect original exposure, then append optional evidence."""
-        detections = self.detect(frame, conf, iou, class_names)
+        detection_floor = tracker.detection_floor(conf) if tracker is not None else conf
+        raw_detections = self.detect(frame, detection_floor, iou, class_names)
+        detections = [item for item in raw_detections if item.score >= conf]
+        low_confidence = [item for item in raw_detections if item.score < conf]
         original_count = len(detections)
         if tiled:
             detections = merge_supplementary(detections, self.detect_tiles(frame, conf, iou, class_names), iou)
@@ -114,9 +118,17 @@ class OpenVocabEngine:
                 extra = self.detect(display, max(conf, 0.45), iou, class_names, source="enhanced")
                 detections = merge_supplementary(detections, extra, iou)
         dark_count = len(detections) - original_count - tile_count
+        if tracker is not None:
+            # Low-score base detections cannot start a new track, but ByteTrack can use
+            # them to bridge a brief confidence drop for an existing object.
+            tracking_candidates = merge_supplementary(detections, low_confidence, iou)
+            detections = tracker.update(
+                tracking_candidates, frame, confidence_threshold=conf, class_names=class_names,
+            )
         output = self.draw_detections(display, detections, visual_template, reference_frame=frame)
         mode = "暗光补检" if enhanced_applied and supplement_dark else "暗光预览" if enhanced_applied else "原图"
-        status = f"{mode} | 原图 {original_count} / 分块新增 {tile_count} / 暗光新增 {dark_count}"
+        tracking_status = f" / 跟踪显示 {len(detections)}" if tracker is not None else ""
+        status = f"{mode} | 原图 {original_count} / 分块新增 {tile_count} / 暗光新增 {dark_count}{tracking_status}"
         return output, detections, status
 
     def draw_detections(self, frame, detections, visual_template=None, reference_frame=None):
@@ -126,7 +138,7 @@ class OpenVocabEngine:
             x1, y1, x2, y2 = map(int, item.xyxy)
             color = {"original": (255, 140, 0), "tile": (0, 200, 255), "enhanced": (100, 220, 100)}[item.source]
             suffix = {"original": "", "tile": " +T", "enhanced": " +E"}[item.source]
-            text = f"{item.label}: {item.score:.2f}{suffix}"
+            text = f"{item.display_label}: {item.score:.2f}{suffix}"
             if visual_template is not None:
                 # Use raw colors before enhancement and before any overlays.
                 roi = reference_frame[y1:y2, x1:x2]
@@ -136,7 +148,7 @@ class OpenVocabEngine:
                 similarity = self.calculate_color_similarity(roi, visual_template)
                 if similarity <= 0.30:
                     continue
-                text = f"{item.label}: {item.score:.2f} match:{similarity:.2f}"
+                text = f"{item.display_label}: {item.score:.2f} match:{similarity:.2f}"
                 color = (0, 255, 0)
             cv2.rectangle(output, (x1, y1), (x2, y2), color, 2)
             (width, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)

@@ -2,15 +2,18 @@
 import os
 import unittest
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("YOLO_CONFIG_DIR", str(Path(__file__).resolve().parent / ".ultralytics"))
 import cv2
 import numpy as np
 
 from detection_utils import Detection, merge_supplementary
 from enhancement import AdaptiveLowLightEngine
 from engines import OpenVocabEngine
+from tracking import ByteTrackManager
 
 
 class EnhancementTests(unittest.TestCase):
@@ -102,6 +105,70 @@ class FusionTests(unittest.TestCase):
             engine.detect(np.zeros((64, 64, 3), np.uint8), class_names=["cup"])
         fake_model.set_classes.assert_called_once_with(["cup"])
 
+    def test_tracking_receives_merged_high_and_low_score_detections(self):
+        from unittest.mock import MagicMock
+        engine = OpenVocabEngine()
+        high = Detection((10, 10, 30, 40), 0.80, 0, "person")
+        low = Detection((50, 10, 70, 40), 0.15, 0, "person")
+        numbered = replace(high, track_id=4, display_id=1)
+        tracker = MagicMock()
+        tracker.detection_floor.return_value = 0.10
+        tracker.update.return_value = [numbered]
+        frame = np.zeros((60, 80, 3), np.uint8)
+        with patch.object(engine, "detect", return_value=[high, low]) as detect:
+            _, detections, status = engine.process_frame(
+                frame, conf=0.4, class_names=["person"], tracker=tracker,
+            )
+        self.assertEqual(detect.call_args.args[1], 0.10)
+        self.assertEqual(tracker.update.call_args.args[0], [high, low])
+        self.assertEqual(detections, [numbered])
+        self.assertIn("跟踪显示 1", status)
+
+
+class TrackingTests(unittest.TestCase):
+    def setUp(self):
+        self.frame = np.zeros((160, 240, 3), np.uint8)
+        self.tracker = ByteTrackManager(track_buffer=30)
+
+    def test_same_object_keeps_person_number_while_moving(self):
+        first = Detection((20, 20, 70, 130), 0.90, 0, "person")
+        moved = replace(first, xyxy=(24, 20, 74, 130), score=0.82)
+        first_result = self.tracker.update([first], self.frame, 0.4, ["person"])
+        second_result = self.tracker.update([moved], self.frame, 0.4, ["person"])
+        self.assertEqual(first_result[0].display_label, "person1")
+        self.assertEqual(second_result[0].display_label, "person1")
+        self.assertEqual(first_result[0].track_id, second_result[0].track_id)
+
+    def test_each_class_receives_its_own_compact_numbering(self):
+        detections = [
+            Detection((10, 10, 50, 120), 0.9, 0, "person"),
+            Detection((80, 10, 120, 120), 0.9, 0, "person"),
+            Detection((150, 30, 175, 70), 0.9, 1, "bottle"),
+            Detection((190, 30, 215, 70), 0.9, 1, "bottle"),
+        ]
+        result = self.tracker.update(detections, self.frame, 0.4, ["person", "bottle"])
+        self.assertEqual(
+            {item.display_label for item in result},
+            {"person1", "person2", "bottle1", "bottle2"},
+        )
+
+    def test_low_confidence_reconnects_but_cannot_start_track(self):
+        high = Detection((20, 20, 70, 130), 0.90, 0, "person")
+        low = replace(high, xyxy=(22, 20, 72, 130), score=0.20)
+        self.tracker.update([high], self.frame, 0.4, ["person"])
+        continued = self.tracker.update([low], self.frame, 0.4, ["person"])
+        self.assertEqual([item.display_label for item in continued], ["person1"])
+
+        fresh = ByteTrackManager()
+        self.assertEqual(fresh.update([low], self.frame, 0.4, ["person"]), [])
+
+    def test_prompt_change_starts_new_numbering_session(self):
+        person = Detection((20, 20, 70, 130), 0.90, 0, "person")
+        first = self.tracker.update([person], self.frame, 0.4, ["person"])
+        restarted = self.tracker.update([person], self.frame, 0.4, ["person", "bag"])
+        self.assertEqual(first[0].display_label, "person1")
+        self.assertEqual(restarted[0].display_label, "person1")
+
 
 class WorkerAndUiTests(unittest.TestCase):
     def test_worker_keeps_raw_frame_and_forwards_enhancement_options(self):
@@ -121,6 +188,7 @@ class WorkerAndUiTests(unittest.TestCase):
         self.assertEqual(engine.imgsz, 1280)
         self.assertTrue(engine.process_frame.call_args.kwargs["tiled"])
         self.assertIs(engine.process_frame.call_args.kwargs["enhancer"], enhancer)
+        self.assertIs(engine.process_frame.call_args.kwargs["tracker"], worker.tracker)
         np.testing.assert_array_equal(engine.process_frame.call_args.args[0], frame)
 
     def test_worker_releases_capture_after_inference_error(self):
@@ -133,6 +201,21 @@ class WorkerAndUiTests(unittest.TestCase):
         with patch.object(worker, "_open_capture", return_value=capture):
             worker.run()
         capture.release.assert_called_once()
+
+    def test_image_worker_reads_one_image_without_opening_video_capture(self):
+        from unittest.mock import MagicMock
+        from video_worker import VideoWorker
+        frame = np.full((40, 60, 3), 120, np.uint8)
+        engine = MagicMock()
+        engine.process_frame.return_value = (frame.copy(), [], "ok")
+        worker = VideoWorker(engine, AdaptiveLowLightEngine(), "测试图片.jpg", source_kind="image")
+        with patch("video_worker.read_image_file", return_value=frame), patch.object(
+            worker, "_open_capture"
+        ) as open_capture:
+            worker.run()
+        open_capture.assert_not_called()
+        engine.process_frame.assert_called_once()
+        self.assertIs(engine.process_frame.call_args.kwargs["tracker"], worker.tracker)
 
     def test_live_controls_and_stop_timeout_keep_worker_alive(self):
         from unittest.mock import MagicMock
@@ -155,6 +238,38 @@ class WorkerAndUiTests(unittest.TestCase):
         self.assertIs(window.worker, worker)
         worker.stop.return_value = True
         self.assertTrue(window.stop_video_stream())
+        window.close()
+
+    def test_ui_renames_input_source_and_offers_image_modes(self):
+        from PySide6.QtWidgets import QApplication, QLabel
+        from main import AIApp
+        app = QApplication.instance() or QApplication([])
+        window = AIApp()
+        labels = {label.text() for label in window.findChildren(QLabel)}
+        self.assertIn("输入源：", labels)
+        self.assertNotIn("视频输入源:", labels)
+        self.assertEqual(
+            [window.source_combo.itemData(i) for i in range(window.source_combo.count())],
+            ["camera", "video", "image", "image_folder"],
+        )
+        window.close()
+
+    def test_image_folder_navigation_wraps_and_updates_selected_path(self):
+        from PySide6.QtWidgets import QApplication
+        from main import AIApp
+        app = QApplication.instance() or QApplication([])
+        window = AIApp()
+        window.image_paths = ["C:/photos/a.jpg", "C:/photos/b.jpg"]
+        window.image_index, window.image_folder = 0, "C:/photos"
+        window.selected_input_kind = "image_folder"
+        window.next_image()
+        self.assertEqual(window.image_index, 1)
+        self.assertEqual(window.selected_input_source, "C:/photos/b.jpg")
+        self.assertEqual(window.image_position_label.text(), "2 / 2")
+        window.next_image()
+        self.assertEqual(window.image_index, 0)
+        window.previous_image()
+        self.assertEqual(window.image_index, 1)
         window.close()
 
 

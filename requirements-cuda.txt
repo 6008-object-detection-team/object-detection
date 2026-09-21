@@ -1,0 +1,4 @@
+# NVIDIA GPU backend. The dedicated index forces CUDA wheels instead of a newer CPU build.
+--index-url https://download.pytorch.org/whl/cu128
+torch==2.9.1
+torchvision==0.24.1

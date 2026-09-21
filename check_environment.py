@@ -15,7 +15,7 @@ def main():
     os.environ.setdefault("YOLO_CONFIG_DIR", str(ROOT / ".ultralytics"))
     errors = []
     print(f"Python: {sys.executable} ({sys.version.split()[0]})")
-    for name in ("numpy", "cv2", "onnxruntime", "PySide6", "torch", "torchvision", "ultralytics", "clip"):
+    for name in ("numpy", "cv2", "onnxruntime", "PySide6", "torch", "torchvision", "ultralytics", "lap", "clip"):
         try:
             module = importlib.import_module(name)
             if name == "clip" and not callable(getattr(module, "tokenize", None)):

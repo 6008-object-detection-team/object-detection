@@ -17,7 +17,7 @@ from app_utils import parse_prompts
 from engines import OpenVocabEngine
 from enhancement import AdaptiveLowLightEngine
 from ui import build_ui
-from video_worker import VideoWorker
+from video_worker import IMAGE_SUFFIXES, VideoWorker
 
 
 class AIApp(QMainWindow):
@@ -35,23 +35,96 @@ class AIApp(QMainWindow):
         self.setWindowTitle("AI 多模态检测系统 · 小目标与自适应暗光增强")
         self.resize(1400, 850)
         self.engine, self.dce_engine, self.worker = OpenVocabEngine(), AdaptiveLowLightEngine(), None
-        self.selected_video_source, self.current_video_label = 0, None
+        self.selected_input_source, self.selected_input_kind = 0, "camera"
+        self.image_paths, self.image_index, self.image_folder = [], -1, None
+        self.current_video_label, self.active_detection_request = None, None
         build_ui(self)
         import torch
         self.device_combo.setCurrentText("CUDA" if torch.cuda.is_available() else "CPU")
 
     def on_source_changed(self, index):
-        if index == 0:
-            self.selected_video_source = 0
+        if not self.stop_video_stream():
+            return
+        kind = self.source_combo.itemData(index)
+        self.image_paths, self.image_index, self.image_folder = [], -1, None
+        self.image_navigation.hide()
+
+        if kind == "camera":
+            self.selected_input_source, self.selected_input_kind = 0, "camera"
             self.file_path_label.hide()
             return
-        path, _ = QFileDialog.getOpenFileName(self, "选择视频文件", "", "视频文件 (*.mp4 *.avi *.mov *.mkv)")
-        if path and os.path.exists(path):
-            self.selected_video_source = path
-            self.file_path_label.setText(f"已选择：{os.path.basename(path)}")
-            self.file_path_label.show()
-        else:
-            self.source_combo.setCurrentIndex(0)
+        if kind == "video":
+            path, _ = QFileDialog.getOpenFileName(
+                self, "选择视频文件", "", "视频文件 (*.mp4 *.avi *.mov *.mkv)"
+            )
+            if path and os.path.isfile(path):
+                self.selected_input_source, self.selected_input_kind = path, "video"
+                self.file_path_label.setText(f"已选择视频：{os.path.basename(path)}")
+                self.file_path_label.show()
+                return
+        elif kind == "image":
+            path, _ = QFileDialog.getOpenFileName(
+                self, "选择图片", "", "图像文件 (*.jpg *.jpeg *.png *.bmp *.webp *.tif *.tiff)"
+            )
+            if path and os.path.isfile(path):
+                self.image_paths, self.image_index = [path], 0
+                self.selected_input_source, self.selected_input_kind = path, "image"
+                self.file_path_label.setText(f"已选择图片：{os.path.basename(path)}")
+                self.file_path_label.show()
+                return
+        elif kind == "image_folder":
+            folder = QFileDialog.getExistingDirectory(self, "选择图片文件夹")
+            if folder:
+                images = sorted(
+                    str(path) for path in Path(folder).rglob("*")
+                    if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
+                )
+                if images:
+                    self.image_paths, self.image_index, self.image_folder = images, 0, folder
+                    self.selected_input_source, self.selected_input_kind = images[0], "image_folder"
+                    self.image_navigation.show()
+                    self._update_image_position()
+                    return
+                QMessageBox.warning(self, "没有可用图片", "所选文件夹中没有支持的 JPG、PNG、BMP、WEBP 或 TIFF 图片。")
+        self._reset_source_to_camera()
+
+    def _reset_source_to_camera(self):
+        self.source_combo.blockSignals(True)
+        self.source_combo.setCurrentIndex(0)
+        self.source_combo.blockSignals(False)
+        self.selected_input_source, self.selected_input_kind = 0, "camera"
+        self.image_paths, self.image_index, self.image_folder = [], -1, None
+        self.file_path_label.hide()
+        self.image_navigation.hide()
+
+    def _update_image_position(self):
+        if not self.image_paths or not 0 <= self.image_index < len(self.image_paths):
+            return
+        self.selected_input_source = self.image_paths[self.image_index]
+        self.image_position_label.setText(f"{self.image_index + 1} / {len(self.image_paths)}")
+        self.file_path_label.setText(
+            f"图片文件夹：{self.image_folder}\n当前：{Path(self.selected_input_source).name}"
+        )
+        self.file_path_label.show()
+
+    def previous_image(self):
+        self._move_image(-1)
+
+    def next_image(self):
+        self._move_image(1)
+
+    def _move_image(self, offset):
+        if len(self.image_paths) < 2:
+            return
+        request = self.active_detection_request
+        if self.worker and not self._stop_input(clear_request=False):
+            return
+        self.image_index = (self.image_index + offset) % len(self.image_paths)
+        self._update_image_position()
+        if request:
+            self._start_stream(
+                request["target_label"], request["prompts"], request["template"]
+            )
 
     def apply_settings(self):
         if not self.stop_video_stream():
@@ -73,8 +146,11 @@ class AIApp(QMainWindow):
             QMessageBox.critical(self, "模型加载失败", status)
 
     def update_worker_classes(self, text):
+        prompts = parse_prompts(text)
         if self.worker:
-            self.worker.class_names = parse_prompts(text)
+            self.worker.class_names = prompts
+        if self.active_detection_request and self.active_detection_request["target_label"] is self.video_label_tab1:
+            self.active_detection_request["prompts"] = prompts
 
     def update_enhancement_state(self, state):
         if self.worker:
@@ -108,14 +184,25 @@ class AIApp(QMainWindow):
         if self.engine.model is None:
             QMessageBox.warning(self, "尚未加载模型", "请先点击“应用设置 / 加载模型”。")
             return
-        if not self.stop_video_stream():
+        if self.selected_input_kind in {"image", "image_folder"} and not os.path.isfile(str(self.selected_input_source)):
+            QMessageBox.warning(self, "图片不可用", "请选择一个存在的图片文件或图片文件夹。")
+            return
+        if not self._stop_input(clear_request=False):
             return
         self.dce_engine.reset()
-        self.worker = VideoWorker(self.engine, self.dce_engine, self.selected_video_source)
+        worker_kind = "image" if self.selected_input_kind in {"image", "image_folder"} else self.selected_input_kind
+        self.worker = VideoWorker(
+            self.engine, self.dce_engine, self.selected_input_source, source_kind=worker_kind
+        )
         self.update_detection_options()
         self.worker.class_names, self.worker.visual_template = prompts, template
         self.worker.use_low_light_enhancement = self.dce_checkbox.isChecked()
         self.current_video_label = target_label
+        self.active_detection_request = {
+            "target_label": target_label,
+            "prompts": list(prompts),
+            "template": template,
+        }
         self.worker.frame_ready.connect(self.update_video_label)
         self.worker.error_signal.connect(self.show_video_error)
         self.worker.info_signal.connect(self.show_video_info)
@@ -147,7 +234,7 @@ class AIApp(QMainWindow):
     def show_video_error(self, message):
         if self.sender() is not self.worker:
             return
-        QMessageBox.critical(self, "视频源/模型错误", message)
+        QMessageBox.critical(self, "输入源/模型错误", message)
         self.stop_video_stream()
 
     @Slot(str)
@@ -157,7 +244,7 @@ class AIApp(QMainWindow):
         QMessageBox.information(self, "提示", message)
         self.stop_video_stream()
 
-    def stop_video_stream(self):
+    def _stop_input(self, clear_request=True):
         if self.worker:
             if not self.worker.stop():
                 self.statusBar().showMessage("正在等待当前模型推理完成，请稍后再操作…")
@@ -165,8 +252,14 @@ class AIApp(QMainWindow):
             self.worker = None
         if self.current_video_label:
             self.current_video_label.clear()
-            self.current_video_label.setText("视频画面预览（已停止）")
+            self.current_video_label.setText("输入画面预览（已停止）")
+            self.current_video_label = None
+        if clear_request:
+            self.active_detection_request = None
         return True
+
+    def stop_video_stream(self):
+        return self._stop_input(clear_request=True)
 
     def closeEvent(self, event):
         if self.stop_video_stream():

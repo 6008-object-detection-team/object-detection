@@ -9,6 +9,13 @@ class Detection:
     class_id: int
     label: str
     source: str = "original"
+    track_id: int | None = None
+    display_id: int | None = None
+
+    @property
+    def display_label(self):
+        """Human-readable label with the per-class session number."""
+        return f"{self.label}{self.display_id}" if self.display_id is not None else self.label
 
 
 def box_iou(first, second):
