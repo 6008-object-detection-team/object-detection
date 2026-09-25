@@ -53,11 +53,13 @@ class EnhancementTests(unittest.TestCase):
 
 
 class FusionTests(unittest.TestCase):
-    def test_grounding_dino_phrase_maps_back_to_user_prompt(self):
-        classes = ["person", "mobile phone", "red backpack"]
-        self.assertEqual(GroundingDinoEngine._label_to_class_id("a mobile phone", classes), 1)
-        self.assertEqual(GroundingDinoEngine._label_to_class_id("red backpack", classes), 2)
-        self.assertEqual(GroundingDinoEngine._label_to_class_id("unknown object", classes), -1)
+    def test_grounding_dino_tokens_map_back_to_user_prompt(self):
+        prompt, spans = GroundingDinoEngine._build_prompt(["person", "mobile phone", "red backpack"])
+        self.assertEqual(prompt, "person. mobile phone. red backpack.")
+        self.assertEqual([prompt[start:end] for start, end in spans], ["person", "mobile phone", "red backpack"])
+        # BERT offsets for [CLS] person . mobile phone . red backpack . [SEP]
+        offsets = [(0, 0), (0, 6), (6, 7), (8, 14), (15, 20), (20, 21), (22, 25), (26, 34), (34, 35), (0, 0)]
+        self.assertEqual(GroundingDinoEngine._class_token_groups(offsets, spans), [[1], [3, 4], [6, 7]])
 
     def test_original_box_and_confidence_survive_all_extra_predictions(self):
         original = Detection((10, 10, 40, 50), 0.51, 0, "bottle")

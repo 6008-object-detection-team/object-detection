@@ -188,18 +188,22 @@ class GroundingDinoEngine(OpenVocabEngine):
             return str(exc)
 
     @staticmethod
-    def _label_to_class_id(label, classes):
-        """Map a grounded phrase back to the nearest user prompt."""
-        normalized = str(label).strip().lower().strip(" .")
-        for index, name in enumerate(classes):
-            candidate = name.strip().lower().strip(" .")
-            if normalized == candidate:
-                return index
-        for index, name in enumerate(classes):
-            candidate = name.strip().lower().strip(" .")
-            if candidate and (candidate in normalized or normalized in candidate):
-                return index
-        return -1
+    def _build_prompt(classes):
+        """Join prompts as "a. b." and record each class name's character span."""
+        spans, cursor = [], 0
+        for name in classes:
+            spans.append((cursor, cursor + len(name)))
+            cursor += len(name) + 2  # the ". " separator
+        return ". ".join(classes) + ".", spans
+
+    @staticmethod
+    def _class_token_groups(offsets, spans):
+        """Token positions inside each class name, from the tokenizer's character offsets."""
+        return [
+            [index for index, (start, end) in enumerate(offsets)
+             if end > start and start >= span_start and end <= span_end]
+            for span_start, span_end in spans
+        ]
 
     def detect(self, frame, conf=0.4, iou=0.45, class_names=None, source="original"):
         """Detect text-prompted objects and return the common Detection format."""
@@ -211,35 +215,38 @@ class GroundingDinoEngine(OpenVocabEngine):
             return []
 
         import torch
+        from torchvision.ops import batched_nms, box_convert
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        prompt = ". ".join(classes) + "."
+        prompt, spans = self._build_prompt(classes)
         inputs = self.processor(images=rgb, text=prompt, return_tensors="pt")
         inputs = {key: value.to(self.device) if hasattr(value, "to") else value for key, value in inputs.items()}
+        offsets = self.processor.tokenizer(prompt, return_offsets_mapping=True)["offset_mapping"]
+        token_groups = self._class_token_groups(offsets, spans)
+        height, width = frame.shape[:2]
         with torch.inference_mode():
             outputs = self.model(**inputs)
-        result = self.processor.post_process_grounded_object_detection(
-            outputs,
-            inputs.get("input_ids"),
-            threshold=conf,
-            text_threshold=min(conf, 0.30),
-            target_sizes=[frame.shape[:2]],
-        )[0]
+            # Score each query against each class by that class's own prompt tokens.
+            # The processor's text_threshold phrase decoding can merge several class
+            # names into one label ("person bicycle car") at low thresholds, which
+            # then maps to the wrong class; this keeps the label independent of conf.
+            token_probs = outputs.logits[0].sigmoid()
+            class_scores = torch.zeros((token_probs.shape[0], len(classes)), device=token_probs.device)
+            for class_id, tokens in enumerate(token_groups):
+                if tokens:
+                    class_scores[:, class_id] = token_probs[:, tokens].max(dim=1).values
+            scores, class_ids = class_scores.max(dim=1)
+            above = scores > conf
+            boxes = box_convert(outputs.pred_boxes[0][above], "cxcywh", "xyxy")
+            boxes = boxes * torch.tensor([width, height, width, height], device=boxes.device)
 
-        boxes = result["boxes"].detach().cpu().numpy()
-        scores = result["scores"].detach().cpu().numpy()
-        labels = result["text_labels"] if "text_labels" in result else result.get("labels", [])
-        height, width = frame.shape[:2]
+        boxes = boxes.float().cpu().numpy()
+        scores = scores[above].float().cpu().numpy()
+        class_ids = class_ids[above].cpu().numpy()
         detections = []
-        for box, score, label in zip(boxes, scores, labels):
-            if hasattr(label, "item"):
-                label = label.item()
-            if isinstance(label, (int, np.integer)):
-                class_id = int(label)
-                text_label = classes[class_id] if 0 <= class_id < len(classes) else str(label)
-            else:
-                text_label = str(label).strip().strip(".")
-                class_id = self._label_to_class_id(text_label, classes)
+        for box, score, class_id in zip(boxes, scores, class_ids):
+            class_id = int(class_id)
+            text_label = classes[class_id]
             x1, y1, x2, y2 = box.astype(float)
             x1, x2 = np.clip([x1, x2], 0, width)
             y1, y2 = np.clip([y1, y2], 0, height)
@@ -254,12 +261,8 @@ class GroundingDinoEngine(OpenVocabEngine):
             return detections
         # Grounding DINO returns filtered queries but does not perform NMS. Match the
         # application's YOLOE semantics and make the existing IoU control effective.
-        from torchvision.ops import batched_nms
         nms_boxes = torch.tensor([item.xyxy for item in detections], dtype=torch.float32)
         nms_scores = torch.tensor([item.score for item in detections], dtype=torch.float32)
-        unknown_class = len(classes)
-        nms_classes = torch.tensor([
-            item.class_id if item.class_id >= 0 else unknown_class for item in detections
-        ])
+        nms_classes = torch.tensor([item.class_id for item in detections])
         keep = batched_nms(nms_boxes, nms_scores, nms_classes, iou).tolist()
         return [detections[index] for index in keep]
