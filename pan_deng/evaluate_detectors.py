@@ -39,11 +39,14 @@ CONFIDENCE = 0.05  # Low on purpose: COCOeval sweeps score thresholds itself; a 
 IOU = 0.45
 
 # Each engine is asked for exactly these COCO class names as its text prompt, so
-# every predicted box can be mapped back to a COCO category id.
+# every predicted box can be mapped back to a COCO category id. The last row reruns
+# Grounding DINO Tiny at its documented default box threshold for comparison.
 MODELS = [
-    ("yoloe_26l", OpenVocabEngine, str(REPO_ROOT / "yoloe-26l-seg.pt")),
-    ("yoloe_26s", OpenVocabEngine, str(REPO_ROOT / "yoloe-26s-seg.pt")),
-    ("grounding_dino_tiny", GroundingDinoEngine, GroundingDinoEngine.MODEL_ID),
+    ("yoloe_26l", OpenVocabEngine, str(REPO_ROOT / "yoloe-26l-seg.pt"), CONFIDENCE),
+    ("yoloe_26s", OpenVocabEngine, str(REPO_ROOT / "yoloe-26s-seg.pt"), CONFIDENCE),
+    ("grounding_dino_tiny", GroundingDinoEngine, GroundingDinoEngine.MODEL_ID, CONFIDENCE),
+    ("grounding_dino_tiny_t035_default_threshold", GroundingDinoEngine,
+     GroundingDinoEngine.MODEL_ID, 0.35),
 ]
 
 
@@ -57,7 +60,7 @@ def read_image(path):
     return cv2.imdecode(data, cv2.IMREAD_COLOR)
 
 
-def run_engine(name, engine_type, model_path, coco, class_names, name_to_cat_id):
+def run_engine(name, engine_type, model_path, coco, class_names, name_to_cat_id, conf=CONFIDENCE):
     engine = engine_type()
     device = "CUDA" if torch.cuda.is_available() else "CPU"
     status = engine.load_model(model_path, device)
@@ -72,10 +75,8 @@ def run_engine(name, engine_type, model_path, coco, class_names, name_to_cat_id)
         frame = read_image(IMAGES_DIR / meta["file_name"])
         if frame is None:
             continue
-        detections = engine.detect(frame, CONFIDENCE, IOU, class_names)
+        detections = engine.detect(frame, conf, IOU, class_names)
         for det in detections:
-            if det.class_id < 0 or det.class_id >= len(class_names):
-                continue  # Grounding DINO occasionally returns an unmatched phrase.
             x1, y1, x2, y2 = det.xyxy
             results.append({
                 "image_id": img_id,
@@ -134,9 +135,12 @@ def main():
             "prompt and scored against real COCO val2017 ground-truth boxes with "
             "pycocotools COCOeval (mAP@[.5:.95] is the primary metric). Confidence "
             "threshold was kept low (0.05) so COCOeval's own score sweep is not "
-            "truncated. Single run, no multi-seed variance; class list limited to "
-            "ten common COCO categories, not the full open-vocabulary range either "
-            "model supports."
+            "truncated; grounding_dino_tiny_t035_default_threshold reruns Grounding "
+            "DINO Tiny at its documented default box threshold (0.35) for comparison. "
+            "Grounding DINO class labels come from each class's own prompt tokens, so "
+            "they do not change with the threshold. Single run, no multi-seed "
+            "variance; class list limited to ten common COCO categories, not the full "
+            "open-vocabulary range either model supports."
         ),
         "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
         "image_count": len(image_ids),
@@ -146,15 +150,17 @@ def main():
         "models": {},
     }
 
-    for name, engine_type, model_path in MODELS:
-        print(f"Running {name}...")
-        results, elapsed = run_engine(name, engine_type, model_path, coco, class_names, name_to_cat_id)
+    for name, engine_type, model_path, conf in MODELS:
+        print(f"Running {name} (confidence {conf})...")
+        results, elapsed = run_engine(name, engine_type, model_path, coco, class_names,
+                                      name_to_cat_id, conf)
         metrics, summary_text = summarize(coco, results, image_ids)
         print(summary_text)
         (OUTPUT_DIR / f"{name}_detections.json").write_text(
             json.dumps(results), encoding="utf-8"
         )
         report["models"][name] = {
+            "confidence_threshold": conf,
             "detections": len(results),
             "inference_seconds_total": round(elapsed, 1),
             "ms_per_image": round(elapsed / max(len(image_ids), 1) * 1000, 1),

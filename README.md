@@ -121,7 +121,9 @@ python pan_deng\evaluate_detectors.py
 
 `download_coco_subset.py` 只下载包含目标类别的约 240 张图片（不是完整 5000 张验证集），需要先从 [COCO 官网](https://cocodataset.org/#download) 下载 `annotations_trainval2017.zip` 并解压出 `instances_val2017.json`。子集图片和完整标注保存在 `pan_deng/coco_eval_data/`（已加入 `.gitignore`，不提交），可复现的评测报告在 `pan_deng/coco_eval_results/report.json`，方法说明和结果表见 `pan_deng/coco_eval_results/README.md`。
 
-结论摘要：这十个类别上 YOLOE-26L 精度最高（mAP@[.5:.95] 0.473），YOLOE-26S 其次（0.418）；Grounding DINO Tiny 对置信度阈值非常敏感——0.05 阈值下会输出大量重复低分框，mAP 只有 0.132，换成官方默认阈值 0.35 后升到 0.414，和 YOLOE-26S 基本持平，但每张图推理耗时约为其 9 倍。
+结论摘要：这十个类别上 Grounding DINO Tiny（mAP@[.5:.95] 0.478）与 YOLOE-26L（0.473）精度相当，YOLOE-26S 为 0.418。DINO Tiny 框更贴合、大目标更好；26L 的 mAP@.5 和小目标更好，按单一阈值算的最佳 F1 也更高（0.713 对 0.645）。速度上 DINO Tiny 每张图约 310 毫秒，是 26L 的约 4 倍、26S 的约 10 倍。
+
+早先报告的 DINO Tiny“0.05 阈值下 mAP 只有 0.132”是标签分配的 bug：文本阈值随置信度一起降低，导致一个框同时命中多个类别词、被标成列表里靠前的类别。`engines.py` 已改为按每个类别自己的提示词 token 打分，应用里的 DINO 后端同样修复。`python pan_deng\sweep_threshold_topk.py` 可以把置信度阈值和每图框数分开测试，结果见 `pan_deng/coco_eval_results/README.md`。
 
 ## 验证与限制
 

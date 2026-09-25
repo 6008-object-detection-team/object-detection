@@ -35,16 +35,7 @@ SERIES = [
 
 def load_models():
     report = json.loads((RESULTS_DIR / "report.json").read_text(encoding="utf-8"))
-    models = dict(report["models"])
-    # evaluate_detectors.py only ever writes the three base configurations; the
-    # 0.35-threshold fairness check was a separate one-off run (see the eval
-    # README) and is merged back in from its own summary file if report.json
-    # doesn't already carry it.
-    key = "grounding_dino_tiny_t035_default_threshold"
-    if key not in models:
-        extra_path = RESULTS_DIR / "grounding_dino_tiny_t035_summary.json"
-        if extra_path.exists():
-            models[key] = json.loads(extra_path.read_text(encoding="utf-8"))
+    models = report["models"]
     missing = [k for k, _, _ in SERIES if k not in models]
     if missing:
         raise SystemExit(f"report.json is missing: {missing}. Run evaluate_detectors.py first.")

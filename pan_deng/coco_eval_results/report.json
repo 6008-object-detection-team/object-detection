@@ -1,5 +1,5 @@
 {
-  "notice": "Each model was queried with the same ten COCO class names as its text prompt and scored against real COCO val2017 ground-truth boxes with pycocotools COCOeval (mAP@[.5:.95] is the primary metric). Confidence threshold was kept low (0.05) so COCOeval's own score sweep is not truncated. Single run, no multi-seed variance; class list limited to ten common COCO categories, not the full open-vocabulary range either model supports. A second Grounding DINO Tiny run at its own documented default box threshold (0.35, vs. 0.05 for the other rows) is included as grounding_dino_tiny_t035_default_threshold: at 0.05 the model floods the image with low-score duplicate boxes and mAP collapses; at 0.35 its mAP@[.5:.95] (0.414) is close to YOLOE-26S (0.418), just far slower per image.",
+  "notice": "Each model was queried with the same ten COCO class names as its text prompt and scored against real COCO val2017 ground-truth boxes with pycocotools COCOeval (mAP@[.5:.95] is the primary metric). Confidence threshold was kept low (0.05) so COCOeval's own score sweep is not truncated; grounding_dino_tiny_t035_default_threshold reruns Grounding DINO Tiny at its documented default box threshold (0.35) for comparison. Grounding DINO class labels come from each class's own prompt tokens, so they do not change with the threshold. Single run, no multi-seed variance; class list limited to ten common COCO categories, not the full open-vocabulary range either model supports.",
   "device": "NVIDIA GeForce RTX 5060 Laptop GPU",
   "image_count": 240,
   "classes": [
@@ -18,9 +18,10 @@
   "iou_threshold": 0.45,
   "models": {
     "yoloe_26l": {
+      "confidence_threshold": 0.05,
       "detections": 3475,
-      "inference_seconds_total": 17.0,
-      "ms_per_image": 70.7,
+      "inference_seconds_total": 20.0,
+      "ms_per_image": 83.4,
       "metrics": {
         "AP@[.5:.95]": 0.4734,
         "AP@.5": 0.7016,
@@ -37,6 +38,7 @@
       }
     },
     "yoloe_26s": {
+      "confidence_threshold": 0.05,
       "detections": 3592,
       "inference_seconds_total": 7.5,
       "ms_per_image": 31.1,
@@ -56,41 +58,43 @@
       }
     },
     "grounding_dino_tiny": {
-      "detections": 40754,
-      "inference_seconds_total": 85.5,
-      "ms_per_image": 356.3,
+      "confidence_threshold": 0.05,
+      "detections": 39070,
+      "inference_seconds_total": 74.4,
+      "ms_per_image": 309.8,
       "metrics": {
-        "AP@[.5:.95]": 0.1318,
-        "AP@.5": 0.1757,
-        "AP@.75": 0.1412,
-        "AP_small": 0.1208,
-        "AP_medium": 0.1713,
-        "AP_large": 0.2138,
-        "AR@1": 0.1313,
-        "AR@10": 0.2436,
-        "AR@100": 0.2904,
-        "AR_small": 0.2456,
-        "AR_medium": 0.3256,
-        "AR_large": 0.3765
+        "AP@[.5:.95]": 0.4775,
+        "AP@.5": 0.6442,
+        "AP@.75": 0.5138,
+        "AP_small": 0.3032,
+        "AP_medium": 0.5729,
+        "AP_large": 0.7233,
+        "AR@1": 0.3728,
+        "AR@10": 0.6346,
+        "AR@100": 0.6731,
+        "AR_small": 0.4875,
+        "AR_medium": 0.7524,
+        "AR_large": 0.8435
       }
     },
     "grounding_dino_tiny_t035_default_threshold": {
       "confidence_threshold": 0.35,
       "detections": 2574,
-      "ms_per_image": 305.8,
+      "inference_seconds_total": 71.8,
+      "ms_per_image": 299.3,
       "metrics": {
-        "AP@[.5:.95]": 0.4138,
-        "AP@.5": 0.5436,
-        "AP@.75": 0.4478,
-        "AP_small": 0.2587,
-        "AP_medium": 0.49,
-        "AP_large": 0.6198,
-        "AR@1": 0.3472,
-        "AR@10": 0.5299,
-        "AR@100": 0.5377,
-        "AR_small": 0.3597,
-        "AR_medium": 0.5991,
-        "AR_large": 0.7399
+        "AP@[.5:.95]": 0.4525,
+        "AP@.5": 0.5965,
+        "AP@.75": 0.4903,
+        "AP_small": 0.2814,
+        "AP_medium": 0.5414,
+        "AP_large": 0.713,
+        "AR@1": 0.3629,
+        "AR@10": 0.5583,
+        "AR@100": 0.566,
+        "AR_small": 0.3751,
+        "AR_medium": 0.6359,
+        "AR_large": 0.8151
       }
     }
   }
