@@ -1,0 +1,7 @@
+# Install requirements-cuda.txt (or requirements-cpu.txt) first.
+# Versions validated by the Windows deployment, including optional backends.
+-r requirements.txt
+-r requirements-evaluation.txt
+-r requirements-dino.txt
+ultralytics==8.4.172
+transformers==4.57.6

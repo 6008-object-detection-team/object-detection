@@ -2,12 +2,14 @@
 #   NVIDIA CUDA 12.8: python -m pip install -r requirements-cuda.txt
 #   CPU only:          python -m pip install -r requirements-cpu.txt
 numpy>=1.24,<2
-opencv-python>=4.8,<5
+scipy>=1.10,<1.17
+opencv-python>=4.8,<4.12
 onnxruntime>=1.16,<2
 PySide6>=6.5,<7
-# YOLOE-26 and the end2end inference switch (verified with 8.4.126).
-ultralytics>=8.4.126,<9
+# YOLOE-26 and SAVPE visual prompts (verified with 8.4.172).
+ultralytics>=8.4.172,<9
 # Ultralytics ByteTrack uses LAP for frame-to-frame assignment.
 lap>=0.5.12
+psutil>=5.9,<8
 # Do not replace with PyPI's unrelated clipboard-manager package named "clip".
 git+https://github.com/ultralytics/CLIP.git

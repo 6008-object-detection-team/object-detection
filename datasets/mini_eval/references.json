@@ -1,0 +1,73 @@
+{
+  "classes": [
+    "bottle",
+    "cup",
+    "cell phone"
+  ],
+  "references": [
+    {
+      "class_id": 0,
+      "class_name": "bottle",
+      "category_id": 44,
+      "original_image_id": 173091,
+      "original_annotation_id": 371373,
+      "bbox_xyxy": [
+        335.57,
+        48.13,
+        556.99,
+        453.84
+      ],
+      "bbox_xywh": [
+        335.57,
+        48.13,
+        221.42,
+        405.71
+      ],
+      "reference_selection": "manually reviewed original COCO box",
+      "image_file": "references/000000173091.jpg"
+    },
+    {
+      "class_id": 1,
+      "class_name": "cup",
+      "category_id": 47,
+      "original_image_id": 311303,
+      "original_annotation_id": 670367,
+      "bbox_xyxy": [
+        353.28,
+        55.53,
+        622.31,
+        408.80999999999995
+      ],
+      "bbox_xywh": [
+        353.28,
+        55.53,
+        269.03,
+        353.28
+      ],
+      "reference_selection": "manually reviewed original COCO box",
+      "image_file": "references/000000311303.jpg"
+    },
+    {
+      "class_id": 2,
+      "class_name": "cell phone",
+      "category_id": 77,
+      "original_image_id": 53909,
+      "original_annotation_id": 325126,
+      "bbox_xyxy": [
+        81.98,
+        27.33,
+        362.43,
+        583.9100000000001
+      ],
+      "bbox_xywh": [
+        81.98,
+        27.33,
+        280.45,
+        556.58
+      ],
+      "reference_selection": "manually reviewed original COCO box",
+      "image_file": "references/000000053909.jpg"
+    }
+  ],
+  "note": "Different COCO images from the evaluation set; original human boxes."
+}

@@ -1,0 +1,4 @@
+# Optional: labelled mini dataset evaluation and actual SAHI slicing.
+# Reuse the existing CUDA PyTorch; do not reinstall its backend.
+sahi==0.11.36
+pycocotools>=2.0.7,<3

@@ -1,5 +1,4 @@
-# The complete project snapshot includes builds, IDE files, logs and caches.
-# Keep environments and credentials local if they are created later.
+# Keep weights, runtime state, credentials and build products local.
 .venv/
 venv/
 env/
@@ -8,9 +7,38 @@ env/
 !.env.example
 __pycache__/
 *.py[cod]
-/.ultralytics/
+.cache/
+.ultralytics/
+/Ultralytics/
+.idea/
+.vscode/
+*.pt
+*.pth
+*.onnx
+*.ts
+*.engine
+*.downloading
+*.tmp
+*.part
+build/
+dist/
+recordings/
+*.key
+*.pem
+*.cache
+work/additional_experiments/resource_wait/
+.local-deployment/
+.deployment-cached/
+validation/
 
-# This 3.4 GB file is stored losslessly as adjacent Git LFS parts.
-# Run python restore_large_files.py to restore its original name and contents.
-/build/app/AIDetectionApp.pkg
+# Retain local caches from the earlier DINO integration.
+.model_cache/
+/pan_deng/coco_eval_data/
+/pan_deng/coco_eval_results/
 *.restoring
+
+# Raw experiment runs stay local; publish curated documentation instead.
+work/
+*.log
+*.mp4
+*.avi

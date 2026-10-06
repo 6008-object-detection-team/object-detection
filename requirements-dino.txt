@@ -1,0 +1,2 @@
+# Optional open-vocabulary Grounding DINO backend; no CUDA extension compilation.
+transformers>=4.57,<5

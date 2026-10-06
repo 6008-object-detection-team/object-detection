@@ -226,11 +226,11 @@ class WorkerAndUiTests(unittest.TestCase):
         worker = MagicMock()
         window.worker = worker
         window.conf_slider.setValue(55)
-        window.resolution_combo.setCurrentIndex(2)
+        window.resolution_combo.setCurrentIndex(window.resolution_combo.findData(960))
         window.tile_checkbox.setChecked(True)
         window.dce_checkbox.setChecked(True)
         self.assertEqual(worker.conf, 0.55)
-        self.assertEqual(worker.imgsz, 1280)
+        self.assertEqual(worker.imgsz, 960)
         self.assertTrue(worker.tiled)
         self.assertTrue(worker.use_low_light_enhancement)
         worker.stop.return_value = False

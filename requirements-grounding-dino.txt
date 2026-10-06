@@ -1,0 +1,5 @@
+-r requirements.txt
+-r requirements-dino.txt
+
+# Backward-compatible installation entry point for the upgraded DINO backend.
+# requirements-windows.txt pins the verified Windows package versions.

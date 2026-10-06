@@ -1,0 +1,7 @@
+# Relative to this YAML directory; original category IDs mapped to 0/1/2.
+train: images/train
+val: images/val
+names:
+  0: bottle
+  1: cup
+  2: cell phone

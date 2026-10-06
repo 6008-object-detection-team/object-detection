@@ -1,124 +1,129 @@
 # AI 多模态检测系统
 
-基于 PySide6、Ultralytics YOLOE、ByteTrack 和 PyTorch 的桌面检测应用，支持摄像头、本地视频、单张图片与图片文件夹。当前版本重点改善小目标检测、同类目标编号和暗光处理。
+基于 PySide6、Ultralytics YOLOE、Grounding DINO Tiny、ByteTrack 和 PyTorch 的桌面检测应用。支持摄像头、本地视频、单张图片和图片文件夹，重点是开放词汇检测、小目标、目标编号和暗光处理。
 
-## 2026-09-21 最新更新
+## 2026-10-07 合并更新
 
-- **输入范围扩展**：除了摄像头和本地视频，现在可以直接选择单张图片或图片文件夹；文件夹模式支持“上一张/下一张”循环查看，界面中的“视频输入源”相应改为“输入源”。
-- **同类目标编号**：新增 ByteTrack，在同一次视频或摄像头会话中将同类目标显示为 `person1`、`person2`、`bottle1` 等，并使用低分检测短暂续接已经建立的轨迹。该编号只代表画面内的运动轨迹，不等同于人脸识别或真实身份识别。
-- **CUDA 安装修正**：PyTorch 后端拆分为 `requirements-cuda.txt` 和 `requirements-cpu.txt`。CUDA 清单使用专用 PyTorch 索引，避免通用依赖安装时误选较新的 CPU 包；虚拟环境本身仍保留在各自电脑上，不上传 GitHub。
-- **仓库清理**：不再跟踪 `__pycache__`、`.pyc` 和 Ultralytics 本机设置，避免上传缓存、绝对路径和不同电脑之间不通用的配置。
-- **验证结果**：20 项回归测试全部通过；项目环境检查确认四个 YOLOE 模型、两个文本编码器及 ByteTrack 依赖均可用。当前验证机器使用 Python 3.10.21、PyTorch 2.9.1+cu128、torchvision 0.24.1+cu128、Ultralytics 8.4.156 和 NVIDIA GeForce RTX 4080 Laptop GPU。
+- 默认 YOLOE-26S、640、FP32；保留 26L、26X、11L 与 DINO Tiny。模型切换前释放旧模型。
+- 视觉提示升级为真正的 YOLOE SAVPE：上传完整参考图并框选目标，用参考物体的视觉特征检测，不再是颜色相似度筛选。DINO 仍为文本后端。
+- 新增 SAHI 小目标切片：320/512/640、20% 重叠、最多 9 块串行，与旧四分块互斥，默认关闭。
+- 摄像头独立采集，只保留最新待检 / 待显示帧；增加显示 FPS、延迟 p50/p95 与替换计数。离线视频仍逐帧处理。
+- 新增 MP4 检测录像和独立最大框数控制；摄像头慢推理时重复处理帧补齐录像时间轴，录像无音轨。
+- 保留图片翻页、中文图片路径、ByteTrack 的 person1/person2 编号和自适应暗光处理。
+- 增加 Windows / Linux 资源保护、DINO 旧评测接口兼容、模型下载校验、小型 COCO 测试资料和评测工具。
 
-在上述机器上，`YOLOE-26S + 640 + CUDA` 预热后的单图纯模型推理平均约为 28.8 ms（约 34.7 FPS）；首次推理约 2.7 秒，包含模型预热和文本类别初始化。界面实际帧率还会受到摄像头读取、目标跟踪、画框、暗光处理和显示缩放影响，该数字不是其他电脑上的性能保证。开启小目标分块补检会由每帧一次推理增加到约五次，暗光补检还可能再增加一次。
+详细范围见 [公开整合更新](docs/UPDATE_20261007.md)，贡献与第三方许可见 [来源说明](UPSTREAM.md)。本次只发布整理后的源码、文档和必要测试资料，不携带私人 Git 历史、个人文件或原始实验日志。
 
-## 下载与配置环境
+## 安装：先选 PyTorch 后端
 
-先安装 Git（包含 Git LFS）和 Python 3.11 / Miniconda，然后执行：
+已有环境可直接更新，虚拟环境不能跨电脑复制。Windows 示例：
 
 ~~~powershell
-git lfs install
-git clone https://github.com/6008-object-detection-team/object-detection.git
-cd object-detection
-git lfs pull
 conda create -n object-detection python=3.11 -y
 conda activate object-detection
-# 以下两行二选一：NVIDIA 显卡使用 CUDA 版；无兼容 NVIDIA 显卡时使用 CPU 版
+# NVIDIA 显卡使用 CUDA 版；没有兼容 NVIDIA 显卡则选择 CPU 版。二选一。
 python -m pip install -r requirements-cuda.txt
 # python -m pip install -r requirements-cpu.txt
-python -m pip install -r requirements.txt
-python check_environment.py
+python -m pip install -r requirements-windows.txt
+~~~
+
+requirements-windows.txt 包含通用、SAHI / pycocotools 评价和 DINO 依赖，并固定 Ultralytics 8.4.172、Transformers 4.57.6。只装基础 YOLOE 时可用 requirements.txt；SAHI 需要 requirements-evaluation.txt，DINO 需要 requirements-dino.txt。旧 requirements-grounding-dino.txt 已转向相同的兼容依赖。
+
+本机沿用原 Conda 6008，未重建环境；已验证 Python 3.10.21、PyTorch 2.9.1+cu128、torchvision 0.24.1+cu128、NumPy 1.26.4、SciPy 1.15.3、OpenCV 4.11.0.86、PySide6 6.11.2、SAHI 0.11.36。其它电脑按 Python、显卡和驱动选择兼容组合，不能直接套用本机性能。
+
+Linux 可建立 .venv，安装一种 PyTorch 后端，再安装通用 / 可选依赖，通过 run_app.sh 启动。Windows 的详细步骤见 [Windows 配置](docs/WINDOWS_SETUP.md)。
+
+## 下载源码与模型
+
+原仓库历史仍包含大型模型和 build，运行新版源码不需要下载历史打包文件。可使用 GitHub Download ZIP 获取源码，或安装 Git / Git LFS 后跳过克隆时自动下载大文件：
+
+~~~powershell
+$env:GIT_LFS_SKIP_SMUDGE='1'
+git clone https://github.com/6008-object-detection-team/object-detection.git
+cd object-detection
+Remove-Item Env:GIT_LFS_SKIP_SMUDGE
+# 默认只取得 26S 和 MobileCLIP2，合计约 272 MiB；校验大小与 SHA-256。
+python tools/fetch_models.py
+# 如需检查全部六个 YOLOE / 编码器权重：
+# python tools/fetch_models.py --all
+~~~
+
+Git LFS 文本指针不是可加载权重；下载脚本会取得真正二进制文件。固定下载来源、大小和 SHA-256 在 model_sources.json。已有且核验通过的权重不重复下载；不需要执行 git lfs pull 来拉取所有历史 build。
+
+DINO 模型为 IDEA-Research/grounding-dino-tiny，首次选择时需要联网取得权重。默认 Hugging Face 缓存保存在项目 .cache/huggingface；缓存和模型不属于本轮新增上传内容。
+
+## 启动与检测
+
+~~~powershell
 python main.py
+# 或在已有环境下：
+.\run_app.bat
 ~~~
 
-模型使用 Git LFS 保存，必须下载实际权重；网页中的小型文本指针不是模型。建议使用以上 Git 命令下载，GitHub 的 Download ZIP 默认可能只有模型指针。环境安装需要网络；四种 YOLOE 模型和两种文本编码器均已包含，下载完整后加载这些模型不需要再次下载权重。完整文件约 5 GB，包含历史打包中间文件。
+程序启动时不自动加载模型。推荐先用 YOLOE-26S、CUDA、640，关闭 SAHI、旧分块和暗光补检，点击“应用设置 / 加载模型”，选择输入，再开始检测。英文目标示例：person, bottle, cup, cell phone。
 
-Windows 也可以在已激活的环境中执行 **run_app.bat**。脚本优先使用 `OBJECT_DETECTION_PYTHON` 指定的解释器、当前虚拟环境/Conda 环境或项目 `.venv`；本机原有的 `6008` 环境仍作为回退，最后尝试 PATH 中的 Python。组员无需修改代码里的盘符路径。`run_app.bat --check` 只检查环境和模型文件。
+run_app.bat 可选择 OBJECT_DETECTION_PYTHON、项目 .venv 或当前激活的环境；6008 是本机回退配置，不是组员必须使用的环境名称。停止后使用“停止并释放模型 / 显存”。
 
-PyTorch 需要按电脑硬件选择安装清单：兼容的 NVIDIA 显卡使用 `requirements-cuda.txt`，没有兼容 NVIDIA 显卡时使用 `requirements-cpu.txt`，然后再安装通用的 `requirements.txt`。CUDA 清单使用专用下载源强制选择 GPU 版本，避免 pip 因版本排序误装 CPU 包。通常无需另装完整 CUDA Toolkit，但 NVIDIA 驱动必须正常。摄像头权限、驱动和推理速度取决于各自设备。当前已验证的环境包括 Windows、Python 3.10.21/3.11.15、PyTorch 2.9.1+cu128 和 Ultralytics 8.4.126 以上兼容版本。
+| 模型 | 主要用途 |
+| --- | --- |
+| YOLOE-26S | 默认实时方案起点，较轻 |
+| YOLOE-26L / 26X | 更大候选，速度与精度需按场景实测 |
+| YOLOE-11L | 旧模型对照 |
+| Grounding DINO Tiny | 英文开放词汇文本检测对照，不支持 SAVPE 页面 |
 
-**当前入口是 main.py。** add picture.py 是旧 ONNX 版本；build 中是历史打包中间文件，不包含后续改进，运行源码不依赖它们。
+推理尺寸最高 960、原图最多 1600 万像素。提高分辨率不能恢复摄像头未拍清的细节；SAHI 增加推理次数，可能引入误检，不默认开启。
 
-## 完整文件与大文件还原
+## 视觉提示与小目标
 
-仓库包含源码、全部现有模型、文档、示例图片、验证结果、安装日志、IDE 配置、缓存和 build 中间文件。本地 `.git` 历史及认证数据不上传；虚拟环境和 `.env` 凭据文件也不纳入版本控制。
+在视觉页上传完整参考图，框选目标并填写显示名称，再开始检测。名称用于显示，SAVPE 参考编码驱动检测；单张参考的外观覆盖有限，不能保证其效果优于文本。
 
-`build/app/AIDetectionApp.pkg` 原文件为 3,406,349,084 字节，超过 [GitHub Free/Pro 的 Git LFS 单文件 2 GB 限制](https://docs.github.com/en/repositories/working-with-files/managing-large-files/about-git-large-file-storage)，因此无损拆分为相邻的四个 `.part001`–`.part004` 文件。`large_files.json` 记录每个分片及原文件的 SHA-256。需要完整恢复历史 build 目录时执行：
+SAHI 切片 20% 重叠、最多 9 块串行，超过限制会停止并提示调整输入或切片大小。与旧四分块补检互斥，最终结果映射回原图并去重。
+
+## ByteTrack 编号
+
+视频 / 摄像头同一次会话内，同类目标显示为 person1、person2、bottle1 等。低分框只能短暂续接已有轨迹，不创建新编号；停止重启、切换输入或修改提示词会开启新会话。单张图片和文件夹每张图片独立编号。
+
+编号是运动轨迹，不是人脸或真实身份识别。长时间离开、严重遮挡、快速运动和交叉仍可能换号，不能保证永不交换 ID。
+
+## 暗光、录像与实时指标
+
+暗光处理使用亮度自适应提亮、温和降噪、增益限制和跨帧平滑；正常曝光自动跳过，全黑画面不制造细节。
+
+- 原图检测 + 暗光补检：保留原图框，仅在需要时额外检测增强图；增加推理开销，新增框仍可能误报。
+- 仅增强预览：增强显示，检测仍用原图，不增加模型检测次数。
+
+摄像头采集与显示各只有一个待处理结果，较慢时新结果替换旧结果；这减少排队，不代表模型前向计算变快。离线视频按顺序处理每帧。显示 FPS 是 Qt 结果提交频率，读帧到界面延迟不包含曝光、驱动内部缓存或屏幕实际刷新。
+
+MP4 无音轨。摄像头录像用重复处理帧保持源时间轴，重复帧无法恢复未采样动作；本地视频按源 FPS 保存处理帧。详细限制和实测方法见 [视频实时性说明](docs/VIDEO_REALTIME.md)。
+
+## 数据和评测工具
+
+小型 COCO 资料保留人工标注、原始 ID、图片来源、逐图许可和 SHA-256：
+
+- datasets/mini_eval：24 图、71 个瓶子 / 杯子 / 手机框，另有 3 张独立参考。
+- datasets/mini_development_quick：6 图快速开发资料。
+- datasets/mini_train_probe：48 / 12 图训练与验证准备资料，与诊断集和参考图 ID 分离。
+
+它们用于功能与开发诊断，不是未见最终测试或完整 COCO 榜单。工具存在不代表训练已执行；本轮没有运行新训练。数据用途见 [数据说明](docs/dataset.md)。
+
+evaluate_mini_dataset.py 提供文本、文本 + SAHI、SAVPE、SAVPE + SAHI 的人工 GT 评价；benchmark_detection.py 分别改变置信度或最大框数，避免把两个变量联动。没有人工标注时，框数与耗时不能称为准确率或召回率。见 [评价流程](docs/evaluation.md) 和 [参数实验](docs/experiments.md)。
+
+pan_deng/ 保留 Pan Deng 的 240 图评价、阈值 / 框数扫描和绘图工具。旧 token 打分 DINO 与当前 GUI 的后处理配置不同，旧 AP 不能直接当作新 GUI AP。
+
+## 资源保护、验证与未完成事项
+
+保持单模型、batch=1、3GiB PyTorch 推理预算、最多 9 个串行切片。加载前需至少 4GiB 空闲显存，推理前至少 1GiB，系统可用 RAM 至少 1.5GiB；GPU 文件锁跨进程互斥。OOM 时停止，不静默重试或切换设备。训练与导出须独立检查资源。
 
 ~~~powershell
-python restore_large_files.py
+python -m pip check
+python -m unittest discover -q
+# --check 会检查六个权重；仅下载默认两件时报告其它模型未安装是预期的。
+.\run_app.bat --check
+# DINO 缓存已备好时：
+# $env:HF_HUB_OFFLINE='1'
+# .\run_app.bat --check --dino
 ~~~
 
-该命令只使用 Python 标准库，校验分片后恢复原文件；若同名原文件已有不同内容，会停止并保留已有文件。`python restore_large_files.py --check` 只做完整性校验。运行检测应用不需要还原这个历史打包文件。
+完整本地合并版已验证 199 项回归：198 项通过，1 项因缺少完整 COCO 原始标注缓存跳过。真实 CUDA 五路径，以及 Qt 图片文件夹、短视频、目标编号和模型切换验证通过。公开发布目录又重跑了全部 199 项，结果同为 198 通过、1 跳过；依赖检查和 Qt 启动也通过，13 个核心运行文件与实测合并版逐字节一致。冷启动计时和单图 0 框结果不用于宣称速度或精度提升。
 
-## 输入源与小目标设置
-
-1. 默认使用 **YOLOE-26L + CUDA + 960**；启动时根据 PyTorch 是否支持 CUDA 选择设备。
-2. 在“输入源”中选择摄像头、视频、单张图片或图片文件夹，再点击“应用设置 / 加载模型”。
-3. 输入目标名称，例如 pen, key, bottle, cell phone，点击“开始检测”。图片文件夹可使用“上一张/下一张”连续查看并检测。
-4. 小物体漏检时，可以将推理分辨率调到 **1280**，或勾选“小目标分块补检”。不要只降低置信度门槛来代替精度改善。
-5. 精度优先时可选 **YOLOE-26X**；速度优先可选 26S。也保留 11L 作为旧模型对照。
-
-| 模型 | 用途 |
-| --- | --- |
-| YOLOE-26L | 默认，兼顾实时性与精度 |
-| YOLOE-26X | 更大模型，推理较慢 |
-| YOLOE-26S | 更小模型，适合速度优先或 CPU |
-| YOLOE-11L | 与原模型对照 |
-
-摄像头会请求 1920×1080，实际取决于设备支持的分辨率，状态栏显示实际输入尺寸。分块模式在完整画面之外，额外检测四个重叠区域，将检测框映射回原图并去重，有助于保留小目标细节；每帧增加四次推理，默认关闭。提高分辨率不能恢复摄像头本来没有拍清的细节。
-
-模型输出分数保持原值。置信度滑块控制新目标的显示门槛，不是识别准确率；已经建立的轨迹可使用较低分数检测短暂续接。分块补充框标记 +T，暗光补充框标记 +E。
-
-## ByteTrack 目标编号
-
-三路检测结果去重合并后交给 ByteTrack，画面会按类别显示 `person1`、`person2`、`bottle1` 等编号。编号在同一次摄像头或视频会话中保持；停止后重新开始、切换输入源或修改提示词会开启新的编号会话。单张图片和文件夹中的每张图片独立编号，避免把不同照片中的人物错误关联。不同类别独立跟踪，低置信度框只能续接已有轨迹，不能创建新编号。
-
-ByteTrack 根据位置、运动和检测分数关联前后帧，不是真实身份识别。目标长时间离开、严重遮挡或外观相近目标交叉时仍可能换号；需要跨长时间重新识别时，应再增加 ReID，而不是微调当前检测器。
-
-[官方 YOLOE 模型与精度说明](https://docs.ultralytics.com/models/yoloe/)：新版接入 YOLOE-26，并使用非端到端检测头（end2end=False）。公开基准结果不能直接当成本项目摄像头场景的准确率。
-
-## 自适应暗光增强
-
-原来的流程在缺少 zero_dce.onnx 时，对每帧执行固定强度 CLAHE，再仅检测增强图。当前改为无需下载增强权重的自适应算法：
-
-- 根据画面亮度选择提亮强度，正常曝光自动跳过增强。
-- 温和双边滤波抑制噪声，平滑光照增益提亮暗部，限制最大增益并保护高光。
-- 同比例调整 B/G/R 通道以尽量保留颜色；平滑相邻帧的曝光参数，场景明显变化时重置。
-- 默认强度 65%，可以实时调整。全黑图像保持原样，避免制造不存在的细节。
-
-提供两种方式：
-
-| 方式 | 检测行为 |
-| --- | --- |
-| 原图检测 + 暗光补检 | 原图照常检测；需要提亮时，再检测增强图并补充不重复的目标 |
-| 仅增强预览 | 只提亮显示画面，检测始终使用原图；不增加模型推理次数 |
-
-暗光补检保留原图已有的框、类别和置信度，新增框使用 max(用户阈值, 0.45) 筛选，并抑制重叠的冲突类别。这样不会因增强替换原图而删除已有检测，但新增框仍可能误报，不能保证所有场景的准确率提高。暗光补检增加一次模型推理；“仅增强预览”也有图像处理开销。
-
-视觉模板功能仍使用颜色相似度筛选；现在始终从未增强、未画框的原图取样，以减少提亮和画框对匹配的干扰。匹配分数与模型置信度分开显示。
-
-## 模型与运行环境
-
-已在本机下载并验证：
-
-- yoloe-26l-seg.pt
-- yoloe-26x-seg.pt
-- yoloe-26s-seg.pt
-- mobileclip2_b.ts（新版文本编码器）
-- 原有 yoloe-11l-seg.pt 与 mobileclip_blt.ts 保留
-
-26S 也已包含在仓库中。新版要求 ultralytics>=8.4.126,<9；当前本机验证版本为 8.4.156。文本提示词继续使用官方 ultralytics/CLIP 依赖。启动脚本会切换到项目目录，避免重复下载文本编码器。
-
-## 验证与限制
-
-~~~powershell
-python -m unittest -v test_detection
-python validate_improvements.py
-~~~
-
-回归测试覆盖正常光照不变、暗部提亮与颜色保持、噪声、补检去重、原图结果保留、分块坐标、ByteTrack 编号与低分续接、模型切换、视频异常释放和实时设置。
-
-对比脚本使用 Ultralytics 自带样图，以及确定性生成的小目标和暗光场景，对比旧模型、新模型、分辨率、旧 CLAHE 和新暗光流程。结果在 validation/comparison.json，附有可检查的检测图。统计的检测数量、置信度和处理耗时不是准确率、召回率或 mAP；完整精度评估仍需要来自实际摄像头的标注样本。
-
-开放词汇检测依然需要提供目标名称；本次没有增加不输入提示词的自动物体命名。模型微调和自动标注页面仍为开发中。
+尚未在本轮验证真实摄像头优化前后性能、长时录像、完整 COCO 精度或训练。模型微调、自动标注页面仍开发中，未实现中英文界面切换。add picture.py 和 build 是旧版内容，不是当前入口；运行新版不需要 restore_large_files.py 还原历史打包文件。
