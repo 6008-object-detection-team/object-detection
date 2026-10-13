@@ -6,6 +6,7 @@ import numpy as np
 
 from detection_utils import Detection
 from resource_safety import ResourceLimitError, preflight_inference
+from i18n import message
 
 
 def validate_slice_plan(shape, slice_size=512, slice_overlap=0.2, max_slices=9):
@@ -23,7 +24,7 @@ def validate_slice_plan(shape, slice_size=512, slice_overlap=0.2, max_slices=9):
     rows = 1 + max(0, int(np.ceil((height - slice_size) / stride)))
     cols = 1 + max(0, int(np.ceil((width - slice_size) / stride)))
     if rows * cols > max_slices:
-        raise ResourceLimitError(f'本图需要 {rows * cols} 块，超过 {max_slices} 块上限；请增大切片或缩小输入图像。')
+        raise ResourceLimitError(message('本图需要 {count} 块，超过 {maximum} 块上限；请增大切片或缩小输入图像。', count=rows * cols, maximum=max_slices))
     from sahi.slicing import get_slice_bboxes
     boxes = get_slice_bboxes(height, width, int(slice_size), int(slice_size),
                              auto_slice_resolution=False,

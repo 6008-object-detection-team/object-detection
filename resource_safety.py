@@ -3,6 +3,7 @@ import functools
 import gc
 import os
 from pathlib import Path
+from i18n import message
 
 MIB = 1024 ** 2
 GPU_BUDGET_MB = 3072
@@ -33,7 +34,7 @@ def available_ram_mb():
 def _check_ram():
     free = available_ram_mb()
     if free < MIN_AVAILABLE_RAM_MB:
-        raise ResourceLimitError(f'可用系统内存仅 {free} MiB，低于 {MIN_AVAILABLE_RAM_MB} MiB；请先关闭其他大程序。')
+        raise ResourceLimitError(message('可用系统内存仅 {free} MiB，低于 {minimum} MiB；请先关闭其他大程序。', free=free, minimum=MIN_AVAILABLE_RAM_MB))
 
 
 def process_max_rss_mib():
@@ -121,7 +122,7 @@ def preflight_inference(device, imgsz=640, frame_shape=None):
     except (TypeError, ValueError, OverflowError):
         valid_size = False
     if not valid_size:
-        raise ResourceLimitError(f'安全模式要求推理尺寸在 32–{MAX_IMAGE_SIZE} 之间。')
+        raise ResourceLimitError(message('安全模式要求推理尺寸在 32–{maximum} 之间。', maximum=MAX_IMAGE_SIZE))
     if frame_shape is not None and int(frame_shape[0]) * int(frame_shape[1]) > MAX_SOURCE_PIXELS:
         raise ResourceLimitError('输入图像超过 1600 万像素，请先缩小图像。')
     _check_ram()

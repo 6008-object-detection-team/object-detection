@@ -99,7 +99,7 @@ class VisualUIControlTests(unittest.TestCase):
         self.assertFalse(window.sahi_checkbox.isChecked())
         self.assertEqual(window.slice_size_combo.currentData(), 512)
         self.assertNotEqual(window.slice_size_combo.findData(320), -1)
-        self.assertEqual(window.prompt_input.text(), "bottle, cup, cell phone")
+        self.assertEqual(window.prompt_input.text(), "")
         window.tile_checkbox.setChecked(True)
         window.sahi_checkbox.setChecked(True)
         self.assertFalse(window.tile_checkbox.isChecked())

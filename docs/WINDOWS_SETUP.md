@@ -33,10 +33,11 @@ python -m venv .venv
 
 ## 模型与检查
 
-默认 YOLOE-26S 需要 `yoloe-26s-seg.pt` 和 `mobileclip2_b.ts`，下载脚本会校验大小与 SHA-256。`--all` 取得六个 YOLOE / 编码器权重：
+默认下载 `yoloe-26s-seg.pt`、`mobileclip2_b.ts` 和 `yoloe-26s-seg-pf.pt`，支持文字 / 参考图和真正无提示检测，下载脚本会校验大小与 SHA-256。`--all` 取得十个原版 / 编码器 / PF 权重；仅下载四种 PF 可用 `--prompt-free`：
 
 ```powershell
 python tools/fetch_models.py --all
+# python tools/fetch_models.py --prompt-free
 .\run_app.bat --check
 # DINO 首次选择时需要联网下载；准备好缓存后可检查离线可用性。
 $env:HF_HUB_OFFLINE='1'
@@ -51,6 +52,6 @@ Windows GPU 锁用 `msvcrt`，Linux 用 `fcntl`；Windows 内存统计用 `psuti
 
 Windows 使用 `run_app.bat`；Linux 使用 `run_app.sh`，并通过 `.venv/bin/python` 或 `OBJECT_DETECTION_PYTHON` 选择自己的解释器。Linux shell 脚本不能直接作为 PowerShell 命令运行。
 
-启动后先用 YOLOE-26S、CUDA、640，关闭 SAHI、旧分块和暗光补检，加载模型，再开始检测。结束时使用“停止并释放模型 / 显存”。低帧率需区分推理耗时与采集 / 显示延迟，不从显卡利用率单独判断原因。
+启动后先用 YOLOE-26S、CUDA、640，关闭 SAHI、旧分块和暗光补检。第 1 页留空提示词，点开始可自动加载同规格 PF；输入文字后再开始会使用对应原版。参考图在第 2 页使用，PF 不能直接接收提示。原权重不改动，只同时保留一个模型；纠错型和 DINO 不会被官方 PF 偷偷替换。操作见 [无提示检测](PROMPT_FREE.md)。结束时使用“停止并释放模型 / 显存”。低帧率需区分推理耗时与采集 / 显示延迟，不从显卡利用率单独判断原因。
 
 摄像头权限、设备读取、长时录像及优化前后 FPS 仍需在每台电脑实测。本轮验证范围见 [公开整合更新](UPDATE_20261007.md)。

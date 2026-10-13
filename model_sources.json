@@ -1,11 +1,37 @@
 {
   "upstream": "https://github.com/6008-object-detection-team/object-detection",
   "commit": "bd298cd74154b3ea1e46182f73080d97f110ee79",
+  "prompt_free_upstream": "https://github.com/ultralytics/assets/releases/tag/v8.4.0",
   "default_models": [
     "yoloe-26s-seg.pt",
-    "mobileclip2_b.ts"
+    "mobileclip2_b.ts",
+    "yoloe-26s-seg-pf.pt"
   ],
   "models": [
+    {
+      "file": "yoloe-26s-seg-pf.pt",
+      "sha256": "01605da3f2e0e5325df45d5f5eef8e40b5b5c7d085399be3c33ac638258b150a",
+      "size": 40003064,
+      "url": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-26s-seg-pf.pt"
+    },
+    {
+      "file": "yoloe-26l-seg-pf.pt",
+      "sha256": "8b0ff5ecfd5baa0ebed509efb00aacff52faae2f6770e7ffa2a223231b9653c0",
+      "size": 94606901,
+      "url": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-26l-seg-pf.pt"
+    },
+    {
+      "file": "yoloe-26x-seg-pf.pt",
+      "sha256": "6591e328fc0012a00beba95710d159c26b0e2dd728ee04b0c8eca1fa0ff859f2",
+      "size": 193087541,
+      "url": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-26x-seg-pf.pt"
+    },
+    {
+      "file": "yoloe-11l-seg-pf.pt",
+      "sha256": "bf39e17c356f4b73977aa978bbdf6d19d0830e6bff46727d2d1f260414e41e0f",
+      "size": 74264838,
+      "url": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-11l-seg-pf.pt"
+    },
     {
       "file": "yoloe-26s-seg.pt",
       "sha256": "48f24206bc8680d60cbbfa296b0140da849669b9515058b72f5a945142df0654",

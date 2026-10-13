@@ -23,6 +23,9 @@ __pycache__/
 build/
 dist/
 recordings/
+feedback_data/
+# Personal demonstration photos are not part of the public test fixtures.
+/datasets/test/
 *.key
 *.pem
 *.cache

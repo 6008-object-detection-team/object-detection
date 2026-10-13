@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+from prompt_modes import PROMPT_FREE_PAIRS
 
 
 def main():
@@ -28,11 +29,10 @@ def main():
             print(f"OK {name}: {getattr(module, '__version__', 'installed')}")
         except Exception as exc:
             errors.append(f"{name}: {exc}")
-    for name in ("yoloe-11l-seg.pt", "yoloe-26s-seg.pt", "yoloe-26l-seg.pt",
-                 "yoloe-26x-seg.pt", "mobileclip_blt.ts", "mobileclip2_b.ts"):
+    for name in (*PROMPT_FREE_PAIRS, "mobileclip_blt.ts", "mobileclip2_b.ts", *PROMPT_FREE_PAIRS.values()):
         path = ROOT / name
         if not path.is_file() or path.stat().st_size < 1024 * 1024:
-            errors.append(f"{name}: missing or a Git LFS pointer; run git lfs pull")
+            errors.append(f"{name}: missing or a Git LFS pointer; run python tools/fetch_models.py --all")
         else:
             print(f"OK {name}: {path.stat().st_size:,} bytes")
     if "torch" in sys.modules:

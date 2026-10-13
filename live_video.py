@@ -1,6 +1,7 @@
 """Bounded camera capture and software display timing; no model ownership."""
 from collections import deque
 from dataclasses import dataclass
+from i18n import message, exception_message
 import threading
 import time
 
@@ -85,7 +86,7 @@ class CameraReader(threading.Thread):
                 if not self.stopping.is_set():
                     self.mailbox.put(CapturedFrame(frame, read_at))
         except Exception as exc:
-            self.error = f"摄像头采集失败：{type(exc).__name__}: {exc}"
+            self.error = message("摄像头采集失败：{kind}: {error}", kind=type(exc).__name__, error=exception_message(exc))
         finally:
             try:
                 self.capture.release()

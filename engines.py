@@ -7,6 +7,8 @@ import cv2
 import numpy as np
 
 from detection_utils import Detection, box_iou, merge_supplementary, tile_regions
+from i18n import message, exception_message
+from overlay_labels import draw_label
 from resource_safety import (prepare_device, preflight_inference, guarded_inference,
                              release_gpu_lease, handle_cuda_oom)
 
@@ -140,11 +142,11 @@ class OpenVocabEngine:
             return "SUCCESS"
         except ImportError as exc:
             self.unload()
-            return f"缺少模型依赖：{exc}。请安装 requirements.txt。"
+            return message("缺少模型依赖：{error}。请安装 requirements.txt。", error=exception_message(exc))
         except Exception as exc:
             handle_cuda_oom(exc)
             self.unload()
-            return str(exc)
+            return exception_message(exc)
 
     def unload(self):
         """Release weights before loading another checkpoint, without retrying."""
@@ -178,10 +180,18 @@ class OpenVocabEngine:
             raise RuntimeError("YOLOE 模型尚未加载")
         max_det = validate_detection_options(conf, iou, max_det)
         preflight_inference(self.device, self.imgsz, frame.shape)
+        self._configure_classes(class_names)
+        return self._predict_boxes(frame, conf, iou, source, max_det)
+
+    def _configure_classes(self, class_names):
+        """Text/visual engines condition this head; prompt-free overrides this."""
         classes = list(class_names or ["person", "vehicle", "animal", "bag", "bottle", "cup", "phone"])
         if classes != self.current_classes:
             self.model.set_classes(classes)
             self.current_classes = classes
+
+    def _predict_boxes(self, frame, conf, iou, source, max_det):
+        """One shared, guarded caller for box-only predictions in every mode."""
         prediction_options = self._runtime_prediction_options()
         if self.model.task == "segment" and self.model.predictor is None:
             # Keep the checkpoint's segment metadata so NMS does not mistake
@@ -276,15 +286,18 @@ class OpenVocabEngine:
             )
             detections = sorted(detections, key=lambda item: item.score, reverse=True)[:max_det]
         output = self.draw_detections(display, detections, visual_template, reference_frame=frame)
-        mode = "暗光补检" if enhanced_applied and supplement_dark else "暗光预览" if enhanced_applied else "原图"
-        tracking_status = f" / 跟踪显示 {len(detections)}" if tracker is not None else ""
-        slice_label = "SAHI" if sliced else "分块"
-        status = f"{mode} | 原图 {original_count} / {slice_label}新增 {tile_count} / 暗光新增 {dark_count}{tracking_status} | 框数上限 {max_det}"
+        mode = message("暗光补检" if enhanced_applied and supplement_dark else "暗光预览" if enhanced_applied else "原图")
+        tracking_status = message(" / 跟踪显示 {count}", count=len(detections)) if tracker is not None else ""
+        slice_label = "SAHI" if sliced else message("分块")
+        status = message("{mode} | 原图 {original} / {slice_label}新增 {tiles} / 暗光新增 {dark}{tracking} | 框数上限 {limit}",
+                         mode=mode, original=original_count, slice_label=slice_label, tiles=tile_count,
+                         dark=dark_count, tracking=tracking_status, limit=max_det)
         return output, detections, status
 
     def draw_detections(self, frame, detections, visual_template=None, reference_frame=None):
         output = frame.copy()
         reference_frame = frame if reference_frame is None else reference_frame
+        labels = []
         for item in detections:
             x1, y1, x2, y2 = map(int, item.xyxy)
             color = {"original": (255, 140, 0), "tile": (0, 200, 255), "slice": (0, 220, 255), "enhanced": (100, 220, 100)}[item.source]
@@ -302,13 +315,62 @@ class OpenVocabEngine:
                 text = f"{item.display_label}: {item.score:.2f} match:{similarity:.2f}"
                 color = (0, 255, 0)
             cv2.rectangle(output, (x1, y1), (x2, y2), color, 2)
-            (width, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            cv2.rectangle(output, (x1, max(0, y1 - 20)), (min(output.shape[1] - 1, x1 + width), y1), color, -1)
-            cv2.putText(output, text, (x1, max(15, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            labels.append((text, x1, y1, color))
+        # Draw labels last so later rectangle strokes cannot erase their text.
+        for text, x, y, color in labels:
+            draw_label(output, text, x, y, color)
         return output
 
     def infer(self, frame, conf=0.4, iou=0.45, class_names=None, visual_template=None, max_det=300):
         return self.process_frame(frame, conf, iou, class_names, visual_template, max_det=max_det)[0]
+
+
+class PromptFreeEngine(OpenVocabEngine):
+    """Official LRPC checkpoint: its full vocabulary is already in the weights.
+
+    Reuses the serial detection, enhancement, slices, tracking and overlay path.
+    Never calls set_classes/get_text_pe or constructs a fixed 80-class prompt.
+    """
+
+    @property
+    def vocabulary_size(self):
+        return len(self.model.names) if self.model is not None else 0
+
+    def load_model(self, model_path, device="CPU"):
+        # No automatic Ultralytics download/fallback on the inference thread.
+        # A manifest-verified local official file must exist before loading.
+        if self.model is not None:
+            self.unload()
+        import json
+        from tools.fetch_models import sha256
+        root = Path(__file__).resolve().parent
+        path = Path(model_path)
+        if not path.is_absolute():
+            path = root / path
+        records = json.loads((root / "model_sources.json").read_text(encoding="utf-8"))["models"]
+        record = next((row for row in records if row["file"] == path.name and path.name.endswith("-seg-pf.pt")), None)
+        if record is None or not path.is_file():
+            return message("无提示权重未就绪：{path}。请运行 python tools/fetch_models.py --prompt-free。", path=str(path))
+        if path.stat().st_size != record["size"] or sha256(path) != record["sha256"]:
+            return message("无提示权重校验失败：{path}。未加载或自动替换，请重新下载并校验。", path=str(path))
+        status = super().load_model(str(path), device)
+        if status != "SUCCESS":
+            return status
+        head = self.model.model.model[-1]
+        if not hasattr(head, "lrpc") or self.vocabulary_size != 4585:
+            self.unload()
+            return message("权重没有官方 LRPC 无提示检测头或完整词汇表；不使用固定类别替代。")
+        return "SUCCESS"
+
+    def _configure_classes(self, class_names):
+        if class_names:
+            raise ValueError("无提示引擎不接受文字或视觉提示；请切换到对应的原版模型。")
+        # Crucially keep the checkpoint's names/head untouched, including IDs >79.
+
+    def process_frame(self, *args, **kwargs):
+        image, detections, status = super().process_frame(*args, **kwargs)
+        return image, detections, message("无提示（{count} 类） | {status}",
+                                          count=self.vocabulary_size, status=status)
 
 
 class GroundingDINOEngine(OpenVocabEngine):
@@ -347,11 +409,11 @@ class GroundingDINOEngine(OpenVocabEngine):
             return "SUCCESS"
         except ImportError as exc:
             self.unload()
-            return f"缺少 Grounding DINO 依赖：{exc}。请安装 requirements-dino.txt。"
+            return message("缺少 Grounding DINO 依赖：{error}。请安装 requirements-dino.txt。", error=exception_message(exc))
         except Exception as exc:
             handle_cuda_oom(exc)
             self.unload()
-            return f"Grounding DINO 加载失败：{exc}"
+            return message("Grounding DINO 加载失败：{error}", error=exception_message(exc))
 
     @guarded_inference
     def detect(self, frame, conf=0.4, iou=0.45, class_names=None, source="original", max_det=300):
