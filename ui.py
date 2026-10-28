@@ -137,7 +137,7 @@ def build_ui(app):
     app.camera_format_combo = QComboBox()
     app.camera_format_combo.addItem("驱动默认（1 缓冲，原有设置）", "default")
     app.camera_format_combo.addItem("MJPG（4 缓冲，需摄像头支持）", "mjpg")
-    app.camera_format_combo.setToolTip("仅对摄像头输入有效，下次开始检测时生效。MJPG 在本机 720p 摄像头上把输入从约 10 FPS 提高到约 30 FPS；摄像头不支持时按默认设置运行。状态栏显示驱动实际协商的格式、分辨率、帧率和缓冲数。")
+    app.camera_format_combo.setToolTip("仅对摄像头输入有效，下次开始检测时生效。MJPG 在本机 720p 摄像头上把输入从约 10 FPS 提高到约 30 FPS，但 CPU 占用更高；摄像头不支持时按默认设置运行。状态栏显示驱动实际协商的格式、分辨率、帧率和缓冲数。")
     app.source_combo = QComboBox()
     for title, kind in [
         ("本地摄像头 (Camera 0)", "camera"),
