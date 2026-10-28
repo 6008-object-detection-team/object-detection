@@ -11,10 +11,10 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtCore import QRect, Qt
+from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit,
-                               QPushButton, QVBoxLayout)
+                               QPushButton, QVBoxLayout, QWidget)
 
 from app_utils import parse_prompts
 from auto_annotation import detect_candidates, read_image_with_sha, weights_sha256
@@ -74,6 +74,30 @@ def match_boxes(boxes_a, boxes_b, iou_threshold=MATCH_IOU):
     return matched, only_a, remaining
 
 
+def header_strip(width, text, height=32):
+    """BGR title strip drawn with Qt, so Chinese text renders with any OpenCV build.
+
+    OpenCV's Hershey fonts turn non-ASCII characters into '?'. Needs a
+    QGuiApplication, which the dialog always has.
+    """
+    width = max(1, int(width))
+    image = QImage(width, height, QImage.Format_RGB888)
+    image.fill(QColor(32, 32, 32))
+    painter = QPainter(image)
+    try:
+        font = painter.font()
+        font.setPixelSize(15)
+        painter.setFont(font)
+        painter.setPen(QColor(255, 255, 255))
+        room = max(1, width - 16)
+        painter.drawText(QRect(8, 0, room, height), int(Qt.AlignLeft | Qt.AlignVCenter),
+                         painter.fontMetrics().elidedText(str(text), Qt.ElideRight, room))
+    finally:
+        painter.end()
+    rows = np.frombuffer(image.constBits(), np.uint8, count=image.sizeInBytes()).reshape(height, image.bytesPerLine())
+    return rows[:, :width * 3].reshape(height, width, 3)[..., ::-1].copy()
+
+
 def render_panel(frame, boxes, differing, title):
     """BGR image (with a title strip) with every box drawn; *differing* indexes are highlighted."""
     output = frame.copy()
@@ -84,17 +108,19 @@ def render_panel(frame, boxes, differing, title):
         score = box.get("score")
         text = box["label"] if score is None else f"{box['label']}: {score:.2f}"
         draw_label(output, text, x1, y1, color)
-    header = np.full((32, output.shape[1], 3), 32, np.uint8)
-    cv2.putText(header, str(title)[:120], (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
-    return np.vstack([header, output])
+    return np.vstack([header_strip(output.shape[1], title), output])
 
 
-def compose_comparison(frame, result_a, result_b):
+def compose_comparison(frame, result_a, result_b, language="zh"):
     """(composite BGR image, summary dict) for two {"title", "boxes"} results on the same frame."""
     matched, only_a, only_b = match_boxes(result_a["boxes"], result_b["boxes"])
     counts_a, counts_b = class_counts(result_a["boxes"]), class_counts(result_b["boxes"])
-    panel_a = render_panel(frame, result_a["boxes"], only_a, f"{result_a['title']} | {len(result_a['boxes'])} boxes")
-    panel_b = render_panel(frame, result_b["boxes"], only_b, f"{result_b['title']} | {len(result_b['boxes'])} boxes")
+
+    def title(result):
+        return render(message("{title} | {count} 框", title=result["title"], count=len(result["boxes"])), language)
+
+    panel_a = render_panel(frame, result_a["boxes"], only_a, title(result_a))
+    panel_b = render_panel(frame, result_b["boxes"], only_b, title(result_b))
     height = max(panel_a.shape[0], panel_b.shape[0])
 
     def pad(panel):
@@ -176,6 +202,22 @@ class CompareModelsDialog(QDialog):
         if ui_language is not None:
             ui_language.capture(self)
 
+    def release(self):
+        """Free a closed dialog: UiLanguage holds strong references to every captured widget.
+
+        The dialog and all of its children are forgotten together (forgetting only the
+        dialog would leave bindings to children that Qt then deletes), and the frame,
+        composite and pixmaps (about 110 MB for a 4032x3024 photo) are dropped.
+        """
+        ui_language = getattr(self.app, "ui_language", None)
+        if ui_language is not None:
+            for widget in [self, *self.findChildren(QWidget)]:
+                ui_language.forget(widget)
+        self.results = self.frame = self._composite = None
+        self.label_a.clear()
+        self.label_b.clear()
+        self.deleteLater()
+
     # Helpers ---------------------------------------------------------------
     def notify(self, value):
         translator = language_for(self.app)
@@ -204,13 +246,12 @@ class CompareModelsDialog(QDialog):
 
     @staticmethod
     def _resolve_path(selected, prompts):
-        if str(selected).startswith("IDEA-Research/"):
-            return selected
+        """The checkpoint that actually runs; DINO and modified weights have no prompt-free
+        version, so an empty prompt raises instead of falling back to fixed classes."""
         return resolve_detection_model(selected, prompt_free=not prompts)
 
-    def _run_one(self, combo, prompts, options):
+    def _run_one(self, path, prompts, options):
         app = self.app
-        path = self._resolve_path(combo.currentData(), prompts)
         self.notify(message("正在加载 {path}…", path=path))
         QApplication.processEvents()
         if not app._load_model_path(path):
@@ -221,7 +262,8 @@ class CompareModelsDialog(QDialog):
             self.notify(message("正在对图片推理：{path}…", path=path))
             QApplication.processEvents()
             boxes, status = detect_candidates(engine, self.frame, dict(options, class_names=class_names), app.dce_engine)
-            return {"path": path, "title": combo.currentText(),
+            # Titled by the checkpoint that ran: a prompt-free entry with a prompt runs its text sibling.
+            return {"path": path, "title": Path(path).name,
                    "sha256": app.active_model_sha256 or weights_sha256(path), "boxes": boxes, "status": status}
         finally:
             app.engine.unload()
@@ -238,8 +280,16 @@ class CompareModelsDialog(QDialog):
         if error:
             self.notify(error)
             return
-        if self.model_a.currentData() == self.model_b.currentData():
-            self.notify(message("请选择两个不同的模型再开始对比。"))
+        prompts = parse_prompts(self.prompt_input.text())
+        try:
+            path_a = self._resolve_path(self.model_a.currentData(), prompts)
+            path_b = self._resolve_path(self.model_b.currentData(), prompts)
+        except ValueError as exc:
+            self.notify(message("对比未完成：{error}", error=exception_message(exc)))
+            return
+        if path_a == path_b:
+            # Compared by the checkpoint that runs, not by the list entry.
+            self.notify(message("两个选项实际运行同一个权重（{path}），请选择两个不同的模型再开始对比。", path=path_a))
             return
         if not app.stop_video_stream():
             self.notify(message("正在等待当前模型推理完成，请稍后再操作…"))
@@ -248,10 +298,10 @@ class CompareModelsDialog(QDialog):
         self.run_button.setEnabled(False)
         self.export_button.setEnabled(False)
         original_index = app.model_combo.currentIndex()
-        prompts, options = parse_prompts(self.prompt_input.text()), self._run_options()
+        options = self._run_options()
         try:
-            result_a = self._run_one(self.model_a, prompts, options)
-            result_b = self._run_one(self.model_b, prompts, options)
+            result_a = self._run_one(path_a, prompts, options)
+            result_b = self._run_one(path_b, prompts, options)
         except Exception as exc:
             self.notify(message("对比未完成：{error}", error=exception_message(exc)))
             self.run_button.setEnabled(True)
@@ -270,7 +320,9 @@ class CompareModelsDialog(QDialog):
 
     def show_results(self):
         result_a, result_b = self.results
-        composite, summary = compose_comparison(self.frame, result_a, result_b)
+        translator = language_for(self.app)
+        language = translator.language if translator else "zh"
+        composite, summary = compose_comparison(self.frame, result_a, result_b, language)
         self._composite = composite
         pixmap = _to_pixmap(composite)
         half = pixmap.width() // 2
@@ -278,8 +330,6 @@ class CompareModelsDialog(QDialog):
             self.label_a.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
         self.label_b.setPixmap(pixmap.copy(half, 0, pixmap.width() - half, pixmap.height()).scaled(
             self.label_b.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        translator = language_for(self.app)
-        language = translator.language if translator else "zh"
         self.summary.setText(render(message(
             "一致框 {matched} | {a} 独有 {only_a} | {b} 独有 {only_b}（IoU < 0.5 或类别不同视为不一致）\n"
             "{a} 类别统计：{counts_a}\n{b} 类别统计：{counts_b}",
@@ -308,7 +358,10 @@ class CompareModelsDialog(QDialog):
 
 
 def open_compare_dialog(app):
-    """Minimal ui.py hook target: build and show the dialog modally."""
+    """Minimal ui.py hook target: build and show the dialog modally, then free it."""
     dialog = CompareModelsDialog(app)
-    dialog.exec()
+    try:
+        dialog.exec()
+    finally:
+        dialog.release()
     return dialog

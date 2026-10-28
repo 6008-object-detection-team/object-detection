@@ -52,7 +52,7 @@ class MessageTests(unittest.TestCase):
                     self.assertFalse(HAN.search(english), source)
 
     def test_all_static_gui_text_has_a_catalog_entry(self):
-        for name in ("main.py", "ui.py", "feedback_ui.py", "auto_annotation_ui.py"):
+        for name in ("main.py", "ui.py", "feedback_ui.py", "auto_annotation_ui.py", "compare_ui.py"):
             tree = ast.parse((PROJECT/name).read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if isinstance(node, ast.Constant) and isinstance(node.value, str) and HAN.search(node.value):
@@ -64,7 +64,7 @@ class MessageTests(unittest.TestCase):
     def test_runtime_errors_and_message_templates_have_catalog_entries(self):
         for name in ("engines.py", "visual_engine.py", "enhancement.py", "resource_safety.py",
                      "sliced_inference.py", "feedback.py", "feedback_training.py", "video_worker.py", "live_video.py", "prompt_modes.py", "modified_models.py",
-                     "auto_annotation.py"):
+                     "auto_annotation.py", "detection_branch.py"):
             tree = ast.parse((PROJECT/name).read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):

@@ -573,7 +573,7 @@ EN = {
     "请先在左侧选择单张图片或图片文件夹作为输入源。": "Select a single image or an image-folder source on the left first.",
     "图片不可用：{path}": "Image not available: {path}",
     "无法读取图片：{path}": "Cannot read image: {path}",
-    "请选择两个不同的模型再开始对比。": "Select two different models before starting the comparison.",
+    "两个选项实际运行同一个权重（{path}），请选择两个不同的模型再开始对比。": "Both choices run the same checkpoint ({path}). Select two different models before starting the comparison.",
     "训练或自动标注进行中，请先等待结束后再对比模型。": "Training or auto-labeling is running; wait for it to finish before comparing models.",
     "正在加载 {path}…": "Loading {path}…",
     "正在对图片推理：{path}…": "Running inference on the image: {path}…",
@@ -598,6 +598,8 @@ EN = {
         "(marked Skipped in the list; hover to see why). The accuracy-first preset always uses 320 px slices, at most 9: "
         "any image up to 832×832 fits, while 1280×720 needs 15. Set this page's preset back to Use the left-side settings, "
         "then choose a larger slice size or turn SAHI off and start again; reviewed images are not overwritten.",
+    "{title} | {count} 框": "{title} | {count} boxes",
+    "导出对比图": "Export comparison image",
 }
 
 

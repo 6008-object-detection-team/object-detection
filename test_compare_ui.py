@@ -1,19 +1,23 @@
 """C4: pin-and-compare two models on one still image — geometry, dialog and PNG export."""
+import gc
 import os
 import re
 import tempfile
 import unittest
+import weakref
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import cv2
 import numpy as np
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication, QAbstractButton, QLabel, QLineEdit, QWidget
 
-from compare_ui import (CompareModelsDialog, box_iou, class_counts, compose_comparison,
+from compare_ui import (CompareModelsDialog, box_iou, class_counts, compose_comparison, header_strip,
                         match_boxes, open_compare_dialog)
 from i18n import EN
+from ui_language import UiLanguage
 
 HAN = re.compile(r"[一-鿿]")
 
@@ -23,6 +27,10 @@ def box(label, xyxy, score=0.9):
 
 
 class GeometryTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.qt_app = QApplication.instance() or QApplication([])  # the header is drawn with Qt
+
     def test_box_iou_matches_known_cases(self):
         self.assertEqual(box_iou([0, 0, 10, 10], [0, 0, 10, 10]), 1.0)
         self.assertEqual(box_iou([0, 0, 10, 10], [20, 20, 30, 30]), 0.0)
@@ -73,6 +81,20 @@ class GeometryTests(unittest.TestCase):
         self.assertGreater(composite.shape[1], frame.shape[1] * 2 - 1)  # two panels + a gap, side by side
         self.assertEqual(summary, {"matched": 1, "only_a": 1, "only_b": 0,
                                    "counts_a": {"bottle": 1, "cup": 1}, "counts_b": {"bottle": 1}})
+        self.assertEqual(composite.shape[0], frame.shape[0] + 32)  # title strip on top
+        wide = np.full((40, 300, 3), 100, np.uint8)  # room for the whole title
+        chinese, _ = compose_comparison(wide, result_a, result_b, "zh")
+        english, _ = compose_comparison(wide, result_a, result_b, "en")
+        self.assertEqual(english.shape, chinese.shape)
+        self.assertFalse(np.array_equal(english[:32], chinese[:32]))  # "| 2 boxes" vs "| 2 框"
+
+    def test_header_draws_non_ascii_titles_instead_of_question_marks(self):
+        chinese = header_strip(300, "YOLOE-26S（实时方案起点） | 3 框")
+        marks = header_strip(300, "YOLOE-26S?????????? | 3 ?")
+        self.assertEqual(chinese.shape, (32, 300, 3))
+        self.assertEqual(chinese.dtype, np.uint8)
+        self.assertGreater(int(chinese.max()), 200)  # white text on the dark strip
+        self.assertFalse(np.array_equal(chinese, marks))
 
 
 class DialogTests(unittest.TestCase):
@@ -185,9 +207,51 @@ class DialogTests(unittest.TestCase):
         self.assertEqual(unload_order, ["yoloe-26s-seg.pt", "yoloe-26l-seg.pt"])
         self.assertIsNotNone(dialog.results)
         self.assertTrue(dialog.export_button.isEnabled())
-        self.assertIn("YOLOE-26S", dialog.status.text())
+        self.assertIn("yoloe-26s-seg.pt", dialog.status.text())  # titled by the checkpoint that ran
+        self.assertEqual([result["title"] for result in dialog.results], ["yoloe-26s-seg.pt", "yoloe-26l-seg.pt"])
         self.assertFalse(dialog.label_a.pixmap().isNull())
         self.assertIn("独有", dialog.summary.text())
+        dialog.close()
+
+    def image_source(self, app):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / "x.png"
+        cv2.imwrite(str(path), np.zeros((10, 10, 3), np.uint8))
+        app.selected_input_source = str(path)
+
+    def test_entries_resolving_to_the_same_checkpoint_are_refused(self):
+        app = self.make_app()
+        titles = ["YOLOE-26S", "YOLOE-26S prompt-free"]
+        paths = ["yoloe-26s-seg.pt", "yoloe-26s-seg-pf.pt"]
+        app.model_combo.count.return_value = 2
+        app.model_combo.itemText.side_effect = lambda i: titles[i]
+        app.model_combo.itemData.side_effect = lambda i: paths[i]
+        self.image_source(app)
+        for prompt, path in (("cup", "yoloe-26s-seg.pt"), ("", "yoloe-26s-seg-pf.pt")):
+            with self.subTest(prompt=prompt):
+                dialog = CompareModelsDialog(app)
+                dialog.prompt_input.setText(prompt)
+                dialog.run_comparison()
+                self.assertIn("同一个权重", dialog.status.text())
+                self.assertIn(path, dialog.status.text())
+                dialog.close()
+        app._load_model_path.assert_not_called()
+        app.stop_video_stream.assert_not_called()
+
+    def test_dino_with_an_empty_prompt_is_refused_not_run_with_fixed_classes(self):
+        app = self.make_app()
+        titles = ["YOLOE-26S", "Grounding DINO Tiny"]
+        paths = ["yoloe-26s-seg.pt", "IDEA-Research/grounding-dino-tiny"]
+        app.model_combo.count.return_value = 2
+        app.model_combo.itemText.side_effect = lambda i: titles[i]
+        app.model_combo.itemData.side_effect = lambda i: paths[i]
+        self.image_source(app)
+        dialog = CompareModelsDialog(app)
+        dialog.run_comparison()
+        self.assertIn("没有对应的无提示版", dialog.status.text())
+        app._load_model_path.assert_not_called()
+        app.stop_video_stream.assert_not_called()
         dialog.close()
 
     def test_run_comparison_reports_a_load_failure_without_crashing(self):
@@ -229,6 +293,29 @@ class OpenDialogTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.qt_app = QApplication.instance() or QApplication([])
+
+    def test_closed_dialog_is_freed_and_language_switching_still_works(self):
+        owner = QWidget()
+        self.addCleanup(owner.deleteLater)
+        language = UiLanguage(owner)
+        app = DialogTests.make_app(self)
+        app.ui_language = language
+        before = set(language._bindings)
+
+        def run(dialog):
+            self.assertTrue(any(key[0] is dialog for key in language._bindings))  # captured while open
+            dialog.frame = np.zeros((300, 400, 3), np.uint8)
+            dialog._composite = np.zeros((332, 804, 3), np.uint8)
+            return 0
+
+        with patch.object(CompareModelsDialog, "exec", run):
+            dialog = weakref.ref(open_compare_dialog(app))
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        gc.collect()
+        self.assertIsNone(dialog())
+        self.assertEqual(set(language._bindings), before)
+        language.set_language("en")  # no binding points at a deleted widget
+        language.set_language("zh")
 
     def test_open_compare_dialog_execs_and_returns_the_dialog(self):
         app = MagicMock()
