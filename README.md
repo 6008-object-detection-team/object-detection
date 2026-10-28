@@ -78,6 +78,22 @@ QT_QPA_PLATFORM=offscreen python -m unittest discover -q
 
 修复后回归：**417 项，416 通过、0 失败、1 项跳过**（同一项：缺少完整 COCO 原始标注缓存）；`python -m pytest -q` 相同。新增 12 项：自动标注 8、暗光评价 2、实时调度 1、ONNX 1。修复前的 405 项仍全部通过，其中 2 项按新语义改了断言（迟到的检测结果不再替换已审核图片的候选；导出最低分数不再删除人工接受的框）。自动标注的真实模型运行没有重做（检测路径未改，导出语义的变化由单元测试覆盖）；实时调度只做了一次 4 秒 CPU 回放复核以确认线程记录，未重做正式计时。
 
+## 2026-10-28 第二轮改进：摄像头格式、未下载权重提示、仅检测分支
+
+分支 `imp/camera-detonly`（基于 `feat/final-features`）。单模型、batch=1、3 GiB 推理预算、GPU 文件锁、不静默重试、不换设备的规则不变；没有新增权重、缓存或实验结果文件。
+
+| 功能 | 默认 | 已验证 | 未验证 | 开发中 |
+| --- | --- | --- | --- | --- |
+| 摄像头格式（设置 →“摄像头格式”） | 驱动默认，与以前完全相同 | 本机同一锁内交替各 3 次 × 30 秒：MJPG 让 CUDA 输出 9.9 → 29.6 FPS、e2e p50 108 → 47 ms、p95 114 → 51 ms；CPU 9.9 → 21.6 FPS、p50 140 → 99 ms；代价是进程 CPU 占用约 2.2–2.7 倍。状态栏显示读回的格式 / 分辨率 / 帧率 / 缓冲数 | Windows DirectShow、组员摄像头、真实摄像头拒绝 MJPG 的情况（只用假摄像头测了回退）、精度 | 是否把 MJPG 设为默认（等组员电脑复测） |
+| 未下载权重提示 | 开启 | 只有 Git LFS 指针（约 133 字节）、缺失或不足 1 MiB 的权重在模型列表标“（未下载）”（中英文）；选择后弹出带 `tools/fetch_models.py` 命令的提示，不再出现 Ultralytics 的 UnpicklingError，已加载的模型保留；`check_environment.py` 本机退出码 0（6 条 WARN） | Windows、界面中手动操作（只做了 offscreen 测试） | — |
+| 仅检测分支（设置 →“仅加载检测分支”） | 开启（文字 / 视觉提示权重） | 26S / 26L 在 `mini_eval` 和 240 图 COCO 子集上 CUDA 预测 JSON 与完整分割模型逐位相同，视觉提示也相同；CPU 上 240 图逐位相同、`mini_eval` 框相同且分数差 ≤ 8.3×10⁻⁷；同一锁内交替计时 det / seg：26L CUDA 0.741、26S CPU 0.710、26S CUDA 0.942；加载多 0.2–0.5 秒 | Windows、修改版权重、26X / 11L、FP16、one2one、SAHI 组合下逐位一致、界面中手动操作 | — |
+
+- **摄像头格式**：“驱动默认（1 缓冲，原有设置）”按原顺序请求 1 个缓冲和 1280×720，不指定像素格式；“MJPG（4 缓冲，需摄像头支持）”先请求 MJPG 再设分辨率，保留 4 个驱动缓冲（1 个缓冲会让本机 MJPG 流减半）。驱动不接受时按默认设置运行并在状态栏注明，不重试。`tools/benchmark_realtime.py --camera-format mjpg` 可复测。详见 [视频实时性说明](docs/VIDEO_REALTIME.md#摄像头格式选项2026-10-28-第二轮)。
+- **未下载权重**：`tools/fetch_models.weight_state()` 只看大小和文件头，不加载、不计算哈希。无提示权重仍由引擎按 `model_sources.json` 的 SHA-256 校验。`check_environment.py`（`run_app --check`）把 YOLOE-26S、26S-PF 和 MobileCLIP2 列为必需（缺失为 ERROR、退出码 1），其它权重和可选包（sahi、pycocotools、onnx、onnxslim、transformers）缺失只打印 WARN，并打印各包版本。
+- **仅检测分支**：程序只画框，不画掩膜。加载文字 / 视觉提示权重时，把分割权重原样复制到 Ultralytics 同规格的检测结构（`yoloe-26s-seg.yaml` → `yoloe-26s.yaml`），逐张量核对相等、只去掉最后一层的掩膜分支，否则保留完整分割模型并在加载状态里写明原因。转换在 CPU 上用 1 个 torch 线程完成（默认 18 线程时建结构在本机要 3.5–3.8 秒，1 线程 0.16–0.17 秒），不写缓存。无提示和 DINO 不转换；命令行工具默认仍用完整分割模型。`inference_options` 新增 `graph`，写入纠错元数据和第 4 页运行配置。方法与完整表格见 [仅检测分支加载](docs/DETECTION_BRANCH.md)。
+- 新增测试：`test_camera_format.py`（10 项）、`test_weight_availability.py`（8 项）、`test_detection_branch.py`（16 项），都不加载模型、不打开摄像头。实验原始结果只在队长本机数据盘，不提交。
+- 回归（Linux，同上文环境）：`QT_QPA_PLATFORM=offscreen python -m unittest discover -q` 共 **451 项，450 通过、0 失败、1 项跳过**（同一项：缺少完整 COCO 原始标注缓存）；改动前 417 项的结果不变，没有修改已有测试。
+
 ## 2026-10-28 第 4 页：文件夹自动标注
 
 - 第 4 页从“开发中”占位改为可用的 **自动标注**（章程中的 Assisted annotation）：选择图片文件夹（JPG / JPEG / PNG / BMP，可含子文件夹、中文路径），用左侧当前模型和参数逐张串行检测，支持文字提示、留空无提示（同规格 PF 权重）和第 2 页视觉参考框；有进度条和停止。
@@ -232,7 +248,7 @@ python tools/fetch_models.py
 # python tools/fetch_models.py --all
 ~~~
 
-Git LFS 文本指针不是可加载权重；下载脚本会取得真正二进制文件。固定下载来源、大小和 SHA-256 在 model_sources.json。已有且核验通过的权重不重复下载；不需要执行 git lfs pull 来拉取所有历史 build。
+Git LFS 文本指针不是可加载权重；下载脚本会取得真正二进制文件。界面模型列表会把只有指针或缺失的权重标为“（未下载）”，选择后提示下载命令。固定下载来源、大小和 SHA-256 在 model_sources.json。已有且核验通过的权重不重复下载；不需要执行 git lfs pull 来拉取所有历史 build。
 
 DINO 模型为 IDEA-Research/grounding-dino-tiny，首次选择时需要联网取得权重。默认 Hugging Face 缓存保存在项目 .cache/huggingface；缓存和模型不属于本轮新增上传内容。
 
@@ -304,7 +320,7 @@ pan_deng/ 保留 Pan Deng 的 240 图评价、阈值 / 框数扫描和绘图工�
 ~~~powershell
 python -m pip check
 python -m unittest discover -q
-# --check 会检查十个权重；仅下载默认三件时报告其它模型未安装是预期的。
+# --check 检查依赖版本和十个权重：26S、26S-PF、MobileCLIP2 缺失为 ERROR（退出码 1）；其它权重和可选包缺失只打印 WARN。
 .\run_app.bat --check
 # DINO 缓存已备好时：
 # $env:HF_HUB_OFFLINE='1'
