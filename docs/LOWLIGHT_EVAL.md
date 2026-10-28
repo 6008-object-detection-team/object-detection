@@ -159,7 +159,7 @@ flock <数据盘>/_tmp/model_run.lock \
   --output <数据盘>/experiments_20261028/lowlight-eval/final
 ```
 
-参考运行从启动到写完报告约 95 秒（每图 29 次检测，共约 2,400 次 CUDA 检测；bootstrap 15 秒）。不指定 `--device` 时使用 CPU；CUDA 不可用或显存不足时停止，不自动换设备。`--limit 2 --bootstrap-samples 50` 可做冒烟检查。`--output` 必须是不存在或空的目录：工具拒绝写入已有结果的目录，不会覆盖旧的 report.json，也不会把旧暗度的预测文件留在新报告旁边（2026-10-28 的参考运行时还没有这项检查）。
+参考运行从启动到写完报告约 95 秒（每图 29 次检测，共约 2,400 次 CUDA 检测；bootstrap 15 秒）。不指定 `--device` 时使用 CPU；CUDA 不可用或显存不足时停止，不自动换设备。`--limit 2 --bootstrap-samples 50` 可做冒烟检查。`--output` 必须是不存在或空的目录：工具拒绝写入已有结果的目录，不会覆盖旧的 report.json，也不会把旧暗度的预测文件留在新报告旁边（2026-10-28 的参考运行时还没有这项检查）。增强计时会把全部暗图（图片数 × 暗度级数）同时放在内存里，默认 84 图 × 4 级约 268 MiB；开始前按这个大小检查可用内存，剩余不足 1.5 GiB 就停止，报告记录 `timing.frames_held_mib`。这个检查不改变计时本身。
 
 输出目录（不提交仓库）：`report.json`（设置、包版本、git 提交、代码 / 权重 / 数据 / 暗图哈希、全部指标、逐类 AP、mini_eval 子集、bootstrap、主机负载）、`summary.md`、`per_image.csv`、`predictions/`（标准 COCO 结果，带 `source` 字段）、`lowlight_ap.png`（AP、ΔAP 区间、界面召回随暗度变化）、`example_000000275198.jpg`（同一图片在各级各条件下 ≥ 0.40 的框；绿色命中、红色误报，细框 +E 为补检），以及 `--save-images` 时的 `images/<级别>/` PNG 暗图和增强图。
 

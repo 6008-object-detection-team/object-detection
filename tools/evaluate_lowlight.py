@@ -549,6 +549,21 @@ def time_enhancements(frames, repeats, strength, enhancer_factory=None, clock=ti
                       "excludes detection, decoding and synthesis."}
 
 
+def check_timing_memory(images, level_count, available_mb=None):
+    """MiB that time_enhancements holds at once (every synthesised dark frame).
+
+    Stops before allocating if that would leave less RAM than the inference
+    preflight requires; on this project's machines a full RAM freezes the host.
+    """
+    from resource_safety import MIN_AVAILABLE_RAM_MB, ResourceLimitError, available_ram_mb
+    needed = sum(int(item["height"]) * int(item["width"]) * 3 for item in images) * level_count / 1024 ** 2
+    free = available_ram_mb() if available_mb is None else available_mb
+    if free - needed < MIN_AVAILABLE_RAM_MB:
+        raise ResourceLimitError(f"增强计时需要同时保存约 {needed:.0f} MiB 暗图，可用内存 {free} MiB，扣除后低于 "
+                                 f"{MIN_AVAILABLE_RAM_MB} MiB；请用 --limit 或减少 --source 图片。")
+    return needed
+
+
 # ---------------------------------------------------------------- outputs
 
 def condition_key(level, condition):
@@ -892,6 +907,7 @@ def main(argv=None, engine_factory=None, enhancer_factory=None):
     engine = None
     try:
         # 1. Enhancement cost, before the detector exists (CPU only).
+        frames_mib = check_timing_memory(annotations["images"], len(levels))
         timing_frames = []
         for item in annotations["images"]:
             frame = decode_image(dataset["paths"][int(item["id"])])
@@ -899,6 +915,7 @@ def main(argv=None, engine_factory=None, enhancer_factory=None):
                 timing_frames.append(synthesize_low_light(
                     frame, level["exposure"], image_seed(args.seed, index, item["id"]), args.full_well, args.read_noise))
         report["timing"] = time_enhancements(timing_frames, args.timing_repeats, args.strength, enhancer_factory)
+        report["timing"]["frames_held_mib"] = frames_mib
         del timing_frames
         atomic_json(output / "report.json", report)
 

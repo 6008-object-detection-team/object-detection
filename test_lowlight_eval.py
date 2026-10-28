@@ -17,8 +17,9 @@ from detection_utils import Detection
 from engines import OpenVocabEngine
 from evaluate_mini_dataset import coco_metrics
 from tools.analyze_saved_predictions import resample_images
+from resource_safety import MIN_AVAILABLE_RAM_MB, ResourceLimitError
 from tools.evaluate_lowlight import (
-    DARK_CONDITIONS, SCHEMA, build_parser, default_example_image, evaluation_tables,
+    DARK_CONDITIONS, SCHEMA, build_parser, check_timing_memory, default_example_image, evaluation_tables,
     git_state, legacy_clahe, main, paired_bootstrap, run_dark_conditions, synthesize_low_light,
     threshold_counts, validate_report, weighted_metrics,
 )
@@ -271,6 +272,7 @@ class EndToEndReportTests(unittest.TestCase):
             broken.pop("bootstrap")
             with self.assertRaises(ValueError):
                 validate_report(broken)
+            self.assertGreater(report["timing"]["frames_held_mib"], 0)
             # A second run never overwrites the first report or mixes prediction files.
             before = (output / "report.json").read_bytes()
             stderr = io.StringIO()
@@ -280,6 +282,13 @@ class EndToEndReportTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn("非空", stderr.getvalue())
             self.assertEqual((output / "report.json").read_bytes(), before)
+
+    def test_timing_frames_are_checked_against_free_ram_before_allocation(self):
+        images = [{"height": 480, "width": 640}] * 84
+        needed = 84 * 4 * 480 * 640 * 3 / 1024 ** 2
+        self.assertAlmostEqual(check_timing_memory(images, 4, available_mb=6000), needed)
+        with self.assertRaises(ResourceLimitError):
+            check_timing_memory(images, 4, available_mb=int(MIN_AVAILABLE_RAM_MB + needed) - 1)
 
     def test_git_state_uses_one_schema_with_or_without_git(self):
         self.assertIn("tracked_source_changes", git_state())
