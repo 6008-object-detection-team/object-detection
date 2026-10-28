@@ -92,6 +92,27 @@ class VerifyTests(unittest.TestCase):
                 detection_yaml(types.SimpleNamespace(yaml=yaml))
 
 
+class ConversionBuildTests(unittest.TestCase):
+    def test_yaml_build_runs_on_one_thread_and_restores_the_count(self):
+        seg = types.SimpleNamespace(task="segment", overrides={},
+                                    model=types.SimpleNamespace(yaml={"yaml_file": "yoloe-26s-seg.yaml"}))
+        before, seen = torch.get_num_threads(), []
+
+        def build(name, verbose=False):
+            seen.append((name, torch.get_num_threads()))
+            raise RuntimeError("stop after the build")
+
+        with patch("ultralytics.YOLOE", side_effect=build), self.assertRaisesRegex(RuntimeError, "stop"):
+            detection_branch.convert_to_detection_branch(seg)
+        self.assertEqual(seen, [("yoloe-26s.yaml", 1)])
+        self.assertEqual(torch.get_num_threads(), before)
+
+    def test_only_segmentation_checkpoints_are_converted(self):
+        with patch("ultralytics.YOLOE") as build, self.assertRaisesRegex(ValueError, "分割权重"):
+            detection_branch.convert_to_detection_branch(types.SimpleNamespace(task="detect"))
+        build.assert_not_called()
+
+
 class FakeWrapper:
     """Just enough of ultralytics.YOLOE for engines.load_model."""
 
