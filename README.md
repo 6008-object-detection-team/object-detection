@@ -21,7 +21,7 @@
 | 功能 | 形式 | 已验证 | 未验证 | 开发中 |
 | --- | --- | --- | --- | --- |
 | 自动标注（第 4 页） | 界面 | 25 项 mock / offscreen 测试；本机 CPU 用 YOLOE-26S 对 `mini_eval` 前 5 张图真实运行文字、无提示（26S-PF）和视觉提示三种模式；导出的 COCO 可被 pycocotools 载入，YOLO 标签可被 Ultralytics 数据集读取器读取（审核由脚本模拟；相对路径含名为 `images` 的子文件夹时 YOLO 导出会拒绝，因为 Ultralytics 会到别处找标签） | 本页的 CUDA 和 DINO、大文件夹、真人标注效率、候选框精度、用导出数据训练 | 审核进度保存到磁盘 |
-| ONNX 导出 / ORT 引擎 | 命令行工具 + 引擎类 | 同输入几何下 ORT 与 PyTorch 逐框一致（分数差 < 5e-6，AP 相同）；高宽动态 det 图与界面路径 AP 同为 0.5953；CPU 中位时延 2 线程 112.0 → 64.7 ms、8 线程 51.1 → 25.4 ms（同一主机、同一锁内背靠背、5 次重复） | onnxruntime-gpu / TensorRT、Windows、26S 以外的型号、FP16 / INT8、无提示和视觉提示导出、与 SAHI / 暗光 / 跟踪的组合 | 接入界面 |
+| ONNX 导出 / ORT 引擎 | 命令行工具 + 引擎类 | 同输入几何下 ORT 与 PyTorch 逐框一致（分数差 < 5e-6，AP 相同）；高宽动态 det 图与界面路径 AP 同为 0.5953；CPU 中位时延（同一主机、同一锁内背靠背、5 次重复）2 线程 112.0 → 64.7 ms、8 线程 51.1 → 25.4 ms，其中改用仅检测分支（PyTorch 同样受益）112.0 → 85.3 / 51.1 → 42.3 ms，同一计算图上 ONNX Runtime 替换 PyTorch 85.3 → 64.7 / 42.3 → 25.4 ms | onnxruntime-gpu / TensorRT、Windows、26S 以外的型号、FP16 / INT8、无提示和视觉提示导出、与 SAHI / 暗光 / 跟踪的组合 | 接入界面 |
 | 实时调度基准 | 命令行工具 | 一台笔记本（RTX 5060 Laptop）上回放与真实摄像头各组 3 次 × 30 秒；程序默认摄像头设置下三种调度的 FPS 和延迟没有可分辨的差异；CPU 慢于帧率时 fifo 延迟涨到数秒，latest 保持有界 | 组员 RTX 3060 / Windows DirectShow、Qt 绘制与屏幕刷新、有运动目标的场景、跳帧对 ByteTrack 的影响、任何精度指标 | — |
 | 暗光定量评价 | 命令行工具 | 本机 CUDA 完整运行 4 次，结果逐位一致；AP 从 0.455 降到 0.401 / 0.365 / 0.330 / 0.234，三种增强都没有可确认的 AP 提升（ΔAP 区间都含 0）；双路径在 AP 协议下与暗图相同 | 真实夜间 / 暗光视频的人工标注评价、其他模型、SAHI 组合、其他增强强度、240 图 10 类子集（图片未下载） | 带人工框的真实暗光测试集 |
 
@@ -80,7 +80,7 @@ QT_QPA_PLATFORM=offscreen python -m unittest discover -q
 - `onnx_engine.py`：`OnnxRuntimeEngine` 只用 ONNX Runtime CPU 与 NumPy，不导入 torch；按 Ultralytics 的 letterbox / NMS / 坐标还原实现，保留 `resource_safety.py` 检查。类别在导出时固定，运行时不能换文字、不能用参考图；请求 CUDA 直接报错，不会悄悄改用 CPU。**界面主检测路径没有改动。**
 - `tools/benchmark_onnx.py`：在 24 图人工标注诊断集上比较 PyTorch 与 ONNX Runtime 的 AP、逐框一致性、时延（每个后端独立进程、轮换顺序、重复 ≥3 次、记录负载）和峰值 RSS。依赖见 `requirements-onnx.txt`（onnx、onnxslim）。
 
-已验证（本机 CPU，5 次重复）：同一输入几何下 ONNX Runtime 与 PyTorch 的框全部一一匹配，最大分数差 < 5e-6，AP 相同。高宽动态的 `det` 图与当前界面路径逐框一致（AP 0.5953），中位时延 2 线程 112.0 → 64.7 ms、8 线程 51.1 → 25.4 ms，进程峰值 RSS 约 1.0 GiB → 271 MiB。静态 640×640 方形输入在这 24 图上 AP 降为 0.5658，完整 seg 图在 ONNX Runtime CPU 上较慢，因此不推荐在 CPU 上使用。实测中发现 Ultralytics 建立预测器时会把 torch 线程重置为 min(8, CPU − 1)，对照工具已恢复并核对线程数。未验证：onnxruntime-gpu / TensorRT（未安装，GPU 只测了 PyTorch CUDA 参考）、Windows、其它型号与类别、FP16/INT8、无提示和视觉提示导出、接入界面。完整回归 **336 项，335 通过、1 项缺少完整 COCO 原始标注缓存而跳过**。协议、完整表格与限制见 [ONNX 导出说明](docs/ONNX_EXPORT.md)；`.onnx`、manifest 和实验原始结果不提交 Git。
+已验证（本机 CPU，5 次重复）：同一输入几何下 ONNX Runtime 与 PyTorch 的框全部一一匹配，最大分数差 < 5e-6，AP 相同。高宽动态的 `det` 图与当前界面路径逐框一致（AP 0.5953），中位时延 2 线程 112.0 → 64.7 ms、8 线程 51.1 → 25.4 ms，进程峰值 RSS 约 1.0 GiB → 271 MiB。时延的下降分两部分：仅检测分支转换在 PyTorch 上已经是 112.0 → 85.3 / 51.1 → 42.3 ms，同一计算图上换成 ONNX Runtime 再到 64.7 / 25.4 ms（配对 bootstrap 区间见说明）。静态 640×640 方形输入在这 24 图上 AP 降为 0.5658，完整 seg 图在 ONNX Runtime CPU 上较慢，因此不推荐在 CPU 上使用。实测中发现 Ultralytics 建立预测器时会把 torch 线程重置为 min(8, CPU − 1)，对照工具已恢复并核对线程数。未验证：onnxruntime-gpu / TensorRT（未安装，GPU 只测了 PyTorch CUDA 参考）、Windows、其它型号与类别、FP16/INT8、无提示和视觉提示导出、接入界面。完整回归 **336 项，335 通过、1 项缺少完整 COCO 原始标注缓存而跳过**。协议、完整表格与限制见 [ONNX 导出说明](docs/ONNX_EXPORT.md)；`.onnx`、manifest 和实验原始结果不提交 Git。
 
 ## 2026-10-28 实时调度实测（基准工具）
 

@@ -4,7 +4,7 @@
 
 | 状态 | 内容 |
 | --- | --- |
-| 已验证（2026-10-28，本机） | YOLOE-26S 固定 3 类（bottle、cup、cell phone）导出 3 个 ONNX：完整分割图 `seg`、仅检测分支 `det`、高宽动态的 `det --dynamic-hw`；ONNX Runtime CPU 在 24 图诊断集上与同输入几何的 PyTorch 预测一致；CPU 时延、峰值内存、文件大小按下文协议实测。重复导出得到的计算图相同（只有 Ultralytics 写入的 `date` 元数据不同）。 |
+| 已验证（2026-10-28，本机） | YOLOE-26S 固定 3 类（bottle、cup、cell phone）导出 3 个 ONNX：完整分割图 `seg`、仅检测分支 `det`、高宽动态的 `det --dynamic-hw`；ONNX Runtime CPU 在 24 图诊断集上与同输入几何的 PyTorch 预测一致；CPU 时延、峰值内存、文件大小按下文协议实测。`seg` 和 `det` 三次导出（实验目录 `models/`、`models_reexport_check/`、`models_final/`）去掉元数据后序列化的计算图完全相同（只有 Ultralytics 写入的 `date` 不同）。`det --dynamic-hw` 用同一版导出工具（`6e4cd80`，此后未改）再导出一次：节点、权重、输入输出和 opset 完全相同，只有中间张量的形状注释（`value_info` 中的符号维度表达式）不同；`models/` 中最早的 dyn 文件由更早版本的工具导出，与最终文件不同，没有用于结果。 |
 | 未验证 | onnxruntime-gpu / TensorRT（本环境未安装 onnxruntime-gpu，GPU 只测了 PyTorch CUDA 作参考）；Windows；26L / 26X / 11L；FP16 / INT8；摄像头长时运行；其它类别组合的精度。`coco10` 类别预设可以导出，但没有评测。 |
 | 开发中 / 未做 | 接入 GUI；无提示（PF，LRPC 4,585 类）导出；视觉提示（SAVPE）导出；SAHI / 暗光 / ByteTrack 与 ONNX 引擎组合的实测（`OnnxRuntimeEngine` 继承了共用流程，但没有单独验证）。 |
 
@@ -47,7 +47,7 @@ python tools/export_onnx.py --classes "person,bottle,cup" --variants det --dynam
 
 所有变体都是 FP32、opset 17（比 Ultralytics 在 torch 2.9 下默认的 18 保守；本机 ORT 1.31.1 已验证）、经 onnxslim 简化、one2many 原始输出（xywh + 类别分数），NMS 在图外由引擎完成，所以置信度、IoU 和框数上限可以在运行时设置。仅检测分支转换只允许 `yoloe-26s-seg.pt`，与此前 GPU 消融相同，避免把权重转移到不匹配的结构。
 
-每个 `.onnx` 旁边有同名 `.manifest.json`：原权重和文字编码器的路径 / 大小 / SHA-256、类别及来源、文字嵌入 SHA-256、导出参数（imgsz、opset、batch、dynamic、stride、nms、head）、输入输出名与形状、前处理约定、ONNX 文件 SHA-256、onnx/ORT 检查结果、软件版本、源码哈希、主机与负载、导出进程峰值 RSS。引擎加载前核对 ONNX 文件哈希，不一致就拒绝加载。本轮导出每个变体约 1–1.8 s，导出进程峰值 RSS 1,337–1,367 MiB，CPU 冷启动文字编码约 0.82–1.35 s。
+每个 `.onnx` 旁边有同名 `.manifest.json`：原权重和文字编码器的路径 / 大小 / SHA-256、类别及来源、文字嵌入 SHA-256、导出参数（imgsz、opset、batch、dynamic、stride、nms、head）、输入输出名与形状、前处理约定、ONNX 文件 SHA-256、onnx/ORT 检查结果、软件版本、源码哈希、主机与负载、导出进程峰值 RSS。引擎加载前核对 ONNX 文件哈希，不一致就拒绝加载。结果所用的 `models_final/` 导出每个变体约 1.0–1.4 s，导出进程峰值 RSS 1,337–1,367 MiB，CPU 冷启动文字编码约 0.82–0.85 s（较早、已被替代的 `models/` 导出中最长为 1.76 s 和 1.35 s）。
 
 ## 引擎（工具用）
 
@@ -94,7 +94,7 @@ python tools/benchmark_onnx.py \
 
 ## 结果（2026-10-28，Intel Core Ultra 7 251HX，Linux，RTX 5060 Laptop）
 
-代码 `6e4cd80`；torch 2.9.1+cu128、Ultralytics 8.4.172、onnxruntime 1.31.1、numpy 2.5.2、opencv 5.0.0。每行 5 次重复 × 24 图 = 120 个计时样本；“各次平均”是 5 次重复各自的平均值范围。
+代码 `6e4cd80`（report.json 记录的 8 个源码 SHA-256 与该提交逐一相同；当时工具还不记录 git 提交，现已补上）；torch 2.9.1+cu128、Ultralytics 8.4.172、onnxruntime 1.31.1、numpy 2.5.2、opencv 5.0.0。每行 5 次重复 × 24 图 = 120 个计时样本；“各次平均”是 5 次重复各自的平均值范围。
 
 ### 精度（两组线程设置结果相同；每个后端 5 次重复的预测完全一致）
 
@@ -127,7 +127,7 @@ python tools/benchmark_onnx.py \
 | `ort_cpu_det` | 87.3 | 87.4 | 88.6 | 87.3–87.5 | 33.9 | 34.7 | 40.2 | 34.1–35.6 | 323 | 否 |
 | `ort_cpu_det_rect` | **64.7** | 63.5 | 69.9 | 63.4–63.6 | **25.4** | 25.4 | 28.8 | 25.2–25.7 | 271 | 否 |
 
-每个 worker 启动前的 1 分钟负载：2 线程 2.40–7.39（第 1 轮从 7.39 逐步降到 5.26，其后在 2.4–5.3 之间），8 线程 2.41–4.88。`pt_cpu_square` 第 3 次重复（2 线程 159.9、8 线程 72.9）明显偏高，其余后端没有同样的偏移，这一点只作记录。两组运行中，ONNX Runtime 每个后端 5 次重复的平均值全部低于 `pt_cpu_square` 5 次中的最小值，`ort_cpu_det_rect` 的 5 次平均值也全部低于 `pt_cpu_rect` 的最小值。
+每个 worker 启动前的 1 分钟负载：2 线程 2.40–7.39（第 1 轮从 7.39 逐步降到 5.26，其后在 2.4–5.3 之间），8 线程 2.41–4.88。`pt_cpu_square` 第 3 次重复（2 线程 159.9、8 线程 72.9）明显偏高，其余后端没有同样的偏移，这一点只作记录。p95 取自 24 张不同图片 × 5 次重复的 120 个样本；同一图片的各次重复比较接近（每图 5 次重复极差的中位数：ONNX Runtime 0.8–3.0 ms，PyTorch 1.9–11.6 ms），所以 p95 实际上主要反映最慢的一两张图，不是 120 个独立样本。两组运行中，ONNX Runtime 每个后端 5 次重复的平均值全部低于 `pt_cpu_square` 5 次中的最小值，`ort_cpu_det_rect` 的 5 次平均值也全部低于 `pt_cpu_rect` 的最小值。
 
 PyTorch CUDA 参考（`pt_cuda_rect`）：中位 5.8 ms、平均 8.8 ms、p95 20.0 ms；每次重复中超过 12 ms 的都是同样 5 张图（62808、543581、301718、474167、2592，各自是首次出现的新输入尺寸），与此前 GPU 消融中的慢图相同；进程峰值 RSS 1764 MiB。它只是参考，不能与 CPU 数值相除来宣称加速。
 
@@ -137,7 +137,7 @@ PyTorch CUDA 参考（`pt_cuda_rect`）：中位 5.8 ms、平均 8.8 ms、p95 20
 
 1. **ONNX Runtime 与 PyTorch 数值一致。** 输入几何相同时，全部框一一匹配，分数差不超过 4.5e-6，AP 完全相同。导出没有带来可测的精度变化。
 2. **差别来自输入几何，不来自后端。** 静态方形输入让 4:3 图片多处理约 1/3 的像素，并在这 24 图上把 AP 从 0.5953 降到 0.5658、APsmall 从 0.4174 降到 0.4129；高宽动态的 `det --dynamic-hw` 与界面路径逐框一致。这只是 24 张开发诊断图上的结果，方形输入的精度损失不一定能推广。
-3. **CPU 时延。** 与当前界面路径 `pt_cpu_rect` 相比，`ort_cpu_det_rect` 中位时延为 0.58 倍（2 线程，112.0 → 64.7 ms）和 0.50 倍（8 线程，51.1 → 25.4 ms），预测相同。可以拆成两部分：仅检测分支转换本身（PyTorch 112.0 → 85.3 / 51.1 → 42.3 ms），以及同一计算图同一输入下 ONNX Runtime 替换 PyTorch（85.3 → 64.7 / 42.3 → 25.4 ms）。完整 seg 图在 ONNX Runtime 上 mask 原型分支代价很高：2 线程逐算子分析（ORT profiler）中 Conv 约占 81%，seg 图约 143 ms，det 图约 89 ms。因此不推荐在 CPU 上用 seg 图。
+3. **CPU 时延。** 与当前界面路径 `pt_cpu_rect` 相比，`ort_cpu_det_rect` 中位时延为 0.58 倍（2 线程，112.0 → 64.7 ms）和 0.50 倍（8 线程，51.1 → 25.4 ms），预测相同。可以拆成两部分：仅检测分支转换本身（PyTorch 112.0 → 85.3 / 51.1 → 42.3 ms），以及同一计算图同一输入下 ONNX Runtime 替换 PyTorch（85.3 → 64.7 / 42.3 → 25.4 ms）。按图配对 bootstrap（24 张图有放回重抽 10,000 次，每次取两个后端全部重复的中位数之比，2.5 / 97.5 百分位）的 95% 区间：合计 0.578 [0.547, 0.581]（2 线程）和 0.497 [0.483, 0.502]（8 线程）；仅检测分支转换 0.761 [0.725, 0.771] 和 0.827 [0.810, 0.848]；ONNX Runtime 替换 PyTorch 0.759 [0.745, 0.779] 和 0.600 [0.582, 0.613]。区间只反映这 24 张图之间的差异，不包括主机、负载或其它图片集。8 线程与本机界面的实际设置相同：界面加载时 Ultralytics 会把 torch 线程重置为 min(8, CPU − 1) = 8。完整 seg 图在 ONNX Runtime 上 mask 原型分支代价很高：2 线程逐算子分析（ORT profiler）中 Conv 约占 81%，seg 图约 143 ms，det 图约 89 ms。因此不推荐在 CPU 上用 seg 图。
 4. **内存。** ONNX Runtime 进程不导入 torch，峰值 RSS 271–379 MiB；PyTorch CPU 进程约 1.0 GiB。
 5. **线程数影响很大。** 结论只适用于这台主机和这两个线程设置。其它 CPU、Windows 或不同负载需要重新测量；不同负载下的计时不能用来证明加速。
 
