@@ -8,8 +8,8 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QProcess, QProcessEnvironment, QTimer
-from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
+from PySide6.QtGui import QColor, QImage, QKeySequence, QPainter, QPen, QPixmap, QShortcut
+from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
     QComboBox, QCheckBox, QListWidget, QSpinBox, QPlainTextEdit, QSplitter)
 
 from app_utils import parse_prompts
@@ -190,6 +190,7 @@ class FeedbackPanel(QWidget):
         self.category.editingFinished.connect(self.relabel)
         right_layout.addWidget(QLabel("框的类别（不使用 person1 等跟踪编号）:")); right_layout.addWidget(self.category)
         self.mode = QComboBox(); self.mode.addItems(["选择 / 拖动现有框", "拖拽补框（或删除旧框后重画）"])
+        self.mode.setToolTip("D 键切换选择 / 拖动现有框与拖拽补框两种模式。")
         self.mode.currentIndexChanged.connect(lambda index: setattr(self.canvas, "mode", "draw" if index else "select"))
         right_layout.addWidget(self.mode)
         self.box_list = QListWidget(); self.box_list.currentRowChanged.connect(self.select_box)
@@ -198,6 +199,11 @@ class FeedbackPanel(QWidget):
             button = QPushButton(title); button.clicked.connect(action); right_layout.addWidget(button)
             if action == self.relabel:
                 self._advanced_widgets.append(button)
+            else:
+                button.setToolTip("删除左侧列表中选中的框。快捷键 Delete。")
+        self.shortcuts_hint = QLabel("快捷键：Delete 删除所选框 · D 切换画框 / 选择模式。输入框获得焦点时快捷键不生效。")
+        self.shortcuts_hint.setWordWrap(True)
+        right_layout.addWidget(self.shortcuts_hint)
         self.scene = QLineEdit(); self.scene.setPlaceholderText("例如：宿舍桌面_白天_拍摄1")
         self.scene.textEdited.connect(self.mark_dirty)
         self.split = QComboBox()
@@ -243,6 +249,38 @@ class FeedbackPanel(QWidget):
         self.refresh()
         app.model_combo.currentIndexChanged.connect(self.on_target_changed)
         self.show_advanced(False)
+        self._build_shortcuts()
+
+    # Keyboard shortcuts (C1): only what Tab 3 actually has a single-image
+    # action for (no accept/reject/next-previous review state here).
+    @staticmethod
+    def _shortcut_blocked():
+        """True while the focused widget is a text field: its own keys win."""
+        widget = QApplication.focusWidget()
+        if widget is None:
+            return False
+        if isinstance(widget, QLineEdit):
+            return True
+        return isinstance(widget, QComboBox) and widget.isEditable()
+
+    def _guarded(self, handler):
+        def activated():
+            if not self._shortcut_blocked():
+                handler()
+        return activated
+
+    def _toggle_draw_mode(self):
+        if self.canvas.image is None:
+            return
+        self.mode.setCurrentIndex(0 if self.mode.currentIndex() else 1)
+
+    def _build_shortcuts(self):
+        self._shortcuts = []
+        for key, handler in ((QKeySequence.Delete, self.canvas.delete_selected), ("D", self._toggle_draw_mode)):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(self._guarded(handler))
+            self._shortcuts.append(shortcut)
 
     def show_advanced(self, visible):
         for widget in self._advanced_widgets:
