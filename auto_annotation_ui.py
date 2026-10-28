@@ -195,21 +195,24 @@ class AutoAnnotationPanel(QWidget):
         right_layout.addWidget(self.category)
         self.mode = QComboBox()
         self.mode.addItems(["选择 / 拖动现有框", "拖拽补框（或删除旧框后重画）"])
+        self.mode.setToolTip("D 键切换选择 / 拖动现有框与拖拽补框两种模式。")
         self.mode.currentIndexChanged.connect(lambda index: setattr(self.canvas, "mode", "draw" if index else "select"))
         right_layout.addWidget(self.mode)
         self.box_list = QListWidget()
         self.box_list.currentRowChanged.connect(self.select_box)
         right_layout.addWidget(self.box_list, 1)
         self.delete_button = QPushButton("删除所选误检框")
+        self.delete_button.setToolTip("删除左侧列表中选中的框。快捷键 Delete。")
         self.delete_button.clicked.connect(self.canvas.delete_selected)
         right_layout.addWidget(self.delete_button)
         self.accept_button = QPushButton("接受本图")
-        self.accept_button.setToolTip("采用当前全部框（含未修改的候选）；有改动时记为“已修改”。随后跳到下一张待审图片。")
+        self.accept_button.setToolTip("采用当前全部框（含未修改的候选）；有改动时记为“已修改”。随后跳到下一张待审图片。快捷键 A。")
         self.accept_button.clicked.connect(self.accept_current)
         self.reject_button = QPushButton("拒绝本图（不导出）")
+        self.reject_button.setToolTip("本图不导出，随后跳到下一张待审图片。快捷键 R。")
         self.reject_button.clicked.connect(self.reject_current)
         self.reset_button = QPushButton("恢复模型候选")
-        self.reset_button.setToolTip("放弃本图的人工修改，恢复模型候选框并改回待审。")
+        self.reset_button.setToolTip("放弃本图的人工修改，恢复模型候选框并改回待审。快捷键 U。")
         self.reset_button.clicked.connect(self.reset_current)
         for button in (self.accept_button, self.reject_button, self.reset_button):
             right_layout.addWidget(button)
@@ -245,6 +248,7 @@ class AutoAnnotationPanel(QWidget):
         self.min_score.setValue(0.0)
         self.min_score.setToolTip("只过滤“按分数批量接受”（未逐张查看）的图片中低于该分数的框；逐张接受或修改的图片按人工结果导出。批量接受的图片若没有框达到该分数则不导出。")
         self.export_yolo_button = QPushButton("导出 YOLO…")
+        self.export_yolo_button.setToolTip("快捷键 Ctrl+E（导出 YOLO）。")
         self.export_yolo_button.clicked.connect(lambda: self.export("yolo"))
         self.export_coco_button = QPushButton("导出 COCO…")
         self.export_coco_button.clicked.connect(lambda: self.export("coco"))
@@ -255,12 +259,19 @@ class AutoAnnotationPanel(QWidget):
         export_row.addWidget(self.export_yolo_button)
         export_row.addWidget(self.export_coco_button)
         root.addLayout(export_row)
+        self.shortcuts_hint = QLabel(
+            "快捷键：A 接受本图 · R 拒绝本图 · U 恢复模型候选 · Delete 删除所选框 · "
+            "N / P 下一张 / 上一张图片 · D 切换画框 / 选择模式 · Ctrl+E 导出 YOLO。"
+            "输入框获得焦点时快捷键不生效。")
+        self.shortcuts_hint.setWordWrap(True)
+        root.addWidget(self.shortcuts_hint)
         self.summary = QLabel()
         self.summary.setWordWrap(True)
         root.addWidget(self.summary)
 
         self.canvas.changed.connect(self.on_canvas_changed)
         self.canvas.selected.connect(self.box_list.setCurrentRow)
+        self._build_shortcuts()
         self.update_summary()
         self.update_controls()
 
@@ -280,6 +291,54 @@ class AutoAnnotationPanel(QWidget):
         """Routine progress stays in the page and status bar, without dialogs."""
         self._bind(self.status_label, value)
         self.app.show_status(value)
+
+    # Keyboard shortcuts (C1) ----------------------------------------------
+    @staticmethod
+    def _shortcut_blocked():
+        """True while the focused widget is a text field: its own keys win."""
+        widget = QApplication.focusWidget()
+        if widget is None:
+            return False
+        if isinstance(widget, QLineEdit):
+            return True
+        return isinstance(widget, QComboBox) and widget.isEditable()
+
+    def _guarded(self, handler):
+        def activated():
+            if not self._shortcut_blocked():
+                handler()
+        return activated
+
+    def _build_shortcuts(self):
+        """QShortcut on the page itself: scoped to this tab, never a text field."""
+        bindings = (("A", self.accept_current), ("R", self.reject_current), ("U", self.reset_current),
+                   (QKeySequence.Delete, self.canvas.delete_selected), ("N", lambda: self._move_selection(1)),
+                   ("P", lambda: self._move_selection(-1)), ("D", self._toggle_draw_mode),
+                   ("Ctrl+E", self._export_shortcut))
+        self._shortcuts = []
+        for key, handler in bindings:
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(self._guarded(handler))
+            self._shortcuts.append(shortcut)
+
+    def _move_selection(self, offset):
+        if self.session is None or not len(self.session):
+            return
+        count = len(self.session)
+        row = self.image_list.currentRow()
+        self.image_list.setCurrentRow((row + offset) % count if row >= 0 else 0)
+
+    def _toggle_draw_mode(self):
+        if self.entry() is None:
+            return
+        self.mode.setCurrentIndex(0 if self.mode.currentIndex() else 1)
+
+    def _export_shortcut(self):
+        if self.export_yolo_button.isEnabled():
+            self.export_yolo_button.click()
+        elif self.export_coco_button.isEnabled():
+            self.export_coco_button.click()
 
     @property
     def running(self):
