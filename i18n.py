@@ -480,6 +480,14 @@ EN = {
     "冻结的骨干/文字/视觉/分割模块发生变化，拒绝注册": "Registration refused: a frozen backbone/text/visual/segmentation module changed.",
     "已保存版本没有有效检测头更新或改变了冻结模块，拒绝注册": "Registration refused: no valid detection-head update, or a frozen module changed.",
     "父模型被外部修改；拒绝注册": "Registration refused: the parent model was changed externally.",
+    # --- imp/camera-detonly ---
+    "未知摄像头格式：{value}": "Unknown camera format: {value}",
+    "摄像头 {fourcc} {width}×{height} {fps} FPS，缓冲 {buffers}": "Camera {fourcc} {width}×{height} {fps} FPS, {buffers} buffer(s)",
+    "{camera}（摄像头未接受 MJPG，已按默认设置运行）": "{camera} (the camera refused MJPG; running with the default settings)",
+    "摄像头格式:": "Camera format:",
+    "驱动默认（1 缓冲，原有设置）": "Driver default (1 buffer, original setting)",
+    "MJPG（4 缓冲，需摄像头支持）": "MJPG (4 buffers, camera must support it)",
+    "仅对摄像头输入有效，下次开始检测时生效。MJPG 在本机 720p 摄像头上把输入从约 10 FPS 提高到约 30 FPS；摄像头不支持时按默认设置运行。状态栏显示驱动实际协商的格式、分辨率、帧率和缓冲数。": "Camera input only; applies the next time detection starts. On the tested 720p webcam MJPG raised the input from about 10 to about 30 FPS. If the camera refuses MJPG, the default settings apply. The status bar shows the format, resolution, frame rate and buffers the driver actually negotiated.",
 }
 
 

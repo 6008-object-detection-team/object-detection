@@ -131,6 +131,10 @@ def build_ui(app):
     for title, path in app.MODELS.items():
         app.model_combo.addItem(title, path)
     app.device_combo = QComboBox(); app.device_combo.addItems(["CPU", "CUDA"])
+    app.camera_format_combo = QComboBox()
+    app.camera_format_combo.addItem("驱动默认（1 缓冲，原有设置）", "default")
+    app.camera_format_combo.addItem("MJPG（4 缓冲，需摄像头支持）", "mjpg")
+    app.camera_format_combo.setToolTip("仅对摄像头输入有效，下次开始检测时生效。MJPG 在本机 720p 摄像头上把输入从约 10 FPS 提高到约 30 FPS；摄像头不支持时按默认设置运行。状态栏显示驱动实际协商的格式、分辨率、帧率和缓冲数。")
     app.source_combo = QComboBox()
     for title, kind in [
         ("本地摄像头 (Camera 0)", "camera"),
@@ -186,7 +190,7 @@ def build_ui(app):
     apply_button = QPushButton("应用设置 / 加载模型"); apply_button.clicked.connect(app.apply_settings)
     release_button = QPushButton("停止并释放模型 / 显存"); release_button.clicked.connect(app.release_model)
     release_button.setToolTip("先等待当前推理结束，再释放权重和 GPU 使用锁，允许运行评价脚本。")
-    for title, widget in [("检测模型:", app.model_combo), ("运行设备:", app.device_combo), ("推理分辨率:", app.resolution_combo), ("", app.sahi_checkbox), ("SAHI 切片尺寸（重叠 20%，上限 9 块）:", app.slice_size_combo), ("", app.tile_checkbox), ("输入源：", app.source_combo), ("", app.file_path_label), ("", app.image_navigation), ("置信度阈值（筛选门槛）:", app.conf_value), ("", app.conf_slider), ("最大预测框数（独立变量）:", app.max_det_spin), ("", app.record_checkbox), ("", app.record_path_input), ("", app.record_path_button), ("", app.dce_checkbox), ("暗光处理方式:", app.dark_mode_combo), ("增强强度:", app.strength_value), ("", app.strength_slider), ("", apply_button), ("", release_button)]:
+    for title, widget in [("检测模型:", app.model_combo), ("运行设备:", app.device_combo), ("推理分辨率:", app.resolution_combo), ("", app.sahi_checkbox), ("SAHI 切片尺寸（重叠 20%，上限 9 块）:", app.slice_size_combo), ("", app.tile_checkbox), ("输入源：", app.source_combo), ("摄像头格式:", app.camera_format_combo), ("", app.file_path_label), ("", app.image_navigation), ("置信度阈值（筛选门槛）:", app.conf_value), ("", app.conf_slider), ("最大预测框数（独立变量）:", app.max_det_spin), ("", app.record_checkbox), ("", app.record_path_input), ("", app.record_path_button), ("", app.dce_checkbox), ("暗光处理方式:", app.dark_mode_combo), ("增强强度:", app.strength_value), ("", app.strength_slider), ("", apply_button), ("", release_button)]:
         if title: left.addWidget(QLabel(title))
         left.addWidget(widget)
     for signal in [app.conf_slider.valueChanged, app.max_det_spin.valueChanged, app.resolution_combo.currentIndexChanged, app.tile_checkbox.stateChanged, app.sahi_checkbox.stateChanged, app.slice_size_combo.currentIndexChanged, app.dark_mode_combo.currentIndexChanged, app.strength_slider.valueChanged]:

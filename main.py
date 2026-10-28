@@ -431,7 +431,7 @@ class AIApp(QMainWindow):
         worker_kind = "image" if self.selected_input_kind in {"image", "image_folder"} else self.selected_input_kind
         self.worker = VideoWorker(
             self.engine, self.dce_engine, self.selected_input_source, source_kind=worker_kind,
-            recording_path=recording_path,
+            recording_path=recording_path, camera_format=self.camera_format_combo.currentData(),
         )
         self.update_detection_options()
         self.worker.class_names, self.worker.visual_template = prompts, template
