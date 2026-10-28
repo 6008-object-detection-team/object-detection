@@ -8,12 +8,26 @@
 .venv/bin/python evaluate_mini_dataset.py \
   --dataset datasets/mini_eval --device CUDA \
   --modes text,text_sahi,visual,visual_sahi \
-  --imgsz 640 --conf 0.05 --iou 0.5 --max-det 100 \
+  --imgsz 640 --conf 0.05 --visual-conf 0.001 --gui-conf 0.40 --iou 0.5 --max-det 100 \
   --slice-size 320 --slice-overlap 0.2 --max-slices 9 \
   --warmup 1 --output work/mini_evaluation
 ```
 
 只检查少量图片可加 `--limit 2`，选择 CPU 可将 `--device CUDA` 改为 `--device CPU`。CPU 运行仍然采用同样的图片、提示和参数；显存不足时程序停止，不自动换 CPU 或重试。
+
+要在另一组人工标注数据（例如留出的 240 图 10 类子集）上评测，加 `--annotations <COCO json>` 和 `--images <图片目录>`；只跑 `text,text_sahi` 时不需要 `--references`（视觉模式必须有独立参考文件，否则在加载模型前报错）：
+
+```bash
+.venv/bin/python evaluate_mini_dataset.py \
+  --annotations /path/to/instances_subset.json --images /path/to/images \
+  --modes text,text_sahi --device CPU --output work/heldout_evaluation
+```
+
+### 视觉模式的置信度阈值（conf vs visual-conf vs gui-conf）
+
+文本模式的 AP 预测阈值仍是 `--conf`（默认 0.05，未改变旧协议）。视觉模式单参考 SAVPE 编码给出的分数比文本低一个数量级：24 图诊断集上单参考在 conf 0.05 的 AP 只有 0.033，但 71 个真值框里 40 个被单参考命中，其中 36 个分数低于 0.05（中位 TP 分数仅 0.0087），把阈值降到 conf 0.001 后 AP 升到约 0.194（见 `experiments_20261028/scan/accuracy/out/visual_analysis.txt`、`report_latex/_facts/assess_forensics.md` §1/§1.2）。因此视觉模式（`visual`、`visual_sahi`）单独用 `--visual-conf`（默认 0.001）计算 AP，文本模式不变，两者不是同阈值对照；需要同阈值对照时可把 `--conf` 也设成 0.001。
+
+无论预测阈值多低，`report.json`/`summary.md` 都另外按界面默认阈值 `--gui-conf`（默认 0.40）统计精确率 / 召回率 / F1：同类别、IoU ≥ 0.50、COCO 贪心匹配、忽略 crowd 区域，近似界面上看到的框。`--gui-conf` 不能低于本次任何模式用到的预测阈值（见下方 `preflight_dataset`），否则两次匹配的框集合不一致，P/R 会漏掉中间置信度的框。`comparison.csv` 的 `prediction_conf`、`*_gui` 列和 `report.json` 的 `thresholds`/`per_class.<name>.gui` 字段记录了本次实际用的三个阈值和对应统计。
 
 | 模式 | 提示 | 推理方式 |
 |---|---|---|
@@ -22,14 +36,14 @@
 | `visual` | 独立参考图 + 人工框，YOLOE SAVPE 编码 | 全图，每类单独推理 |
 | `visual_sahi` | 同样独立视觉参考 | 每类全图 + SAHI 切片 |
 
-四组采用同一 YOLOE 26S 权重、阈值、尺寸和全图输出框数上限。视觉编码使用完整参考图和其目标框，每个参考编码一次；之后重复使用该嵌入，不使用颜色直方图筛选，也不重新编码文本。视觉模式按“一个参考类别 → 全部测试图”的顺序执行，汇总三个类别后按分数应用每图最多 100 框。参考图 ID 在任何 `--limit` 之前与完整测试集检查分离。
+四组采用同一 YOLOE 26S 权重、尺寸和全图输出框数上限；AP 预测阈值文本模式用 `--conf`、视觉模式用 `--visual-conf`（见上一节），P/R/F1 统一用 `--gui-conf`。视觉编码使用完整参考图和其目标框，每个参考编码一次；之后重复使用该嵌入，不使用颜色直方图筛选，也不重新编码文本。视觉模式按“一个参考类别 → 全部测试图”的顺序执行，汇总三个类别后按分数应用每图最多 100 框。参考图 ID 在任何 `--limit` 之前与完整测试集检查分离。
 
 程序逐张读图，一次只持有一个模型，每个模式完成后卸载。SAHI 切片逐块推理，batch=1，最多 9 块。开始加载权重之前检查全部选定图片的切片数量与系统内存；GPU 进程使用项目统一的 3 GiB 分配上限和互斥锁。阈值过低会增加候选框，切片会增加推理次数，但不会并行加载额外模型。
 
 输出目录包含：
 
-- `summary.md`、`comparison.csv`：四组 AP、AP50、AP75、小目标 AP、AR100、延迟与显存峰值。
-- `report.json`：完整类别指标、参数、包版本、数据/权重哈希、参考框和编码时间。
+- `summary.md`、`comparison.csv`：四组 AP、AP50、AP75、小目标 AP、AR100、GUI 阈值下的 P/R/F1、延迟与显存峰值。
+- `report.json`：完整类别指标（含每类 P/R/F1）、参数、三个阈值、数据来源与哈希、包版本、权重哈希、参考框和编码时间。
 - `modes/<mode>/predictions.json`：可重新评价的标准 COCO 预测。
 - `modes/<mode>/timings.csv`：逐图计时。
 - `samples/`：左侧人工真值、右侧预测的并排图。仅示例图显示分数 ≥ 0.25 的框；AP 仍使用配置阈值下所有预测。
@@ -46,7 +60,7 @@ COCO 指标使用标准 `maxDets=[1,10,100]`、IoU 0.50–0.95；AP 和 AR 取�
 .venv/bin/python -m unittest test_visual_engine test_mini_evaluation -v
 ```
 
-包含完美真值 AP=1、空预测 AP=0、参考图泄漏拒绝、切片/内存预检、各模式参数一致、逐类汇总后总框数上限和视觉缓存切换的覆盖；这些测试不加载模型或运行 GPU。
+包含完美真值 AP=1、空预测 AP=0、参考图泄漏拒绝、切片/内存预检、各模式参数一致、逐类汇总后总框数上限、视觉缓存切换、GUI 阈值 P/R/F1（整体与逐类）、`--annotations`/`--images` 自定义数据源（含无参考文件时仅文本模式可跑）、以及 `--gui-conf` 低于预测阈值时的拒绝的覆盖；这些测试不加载模型或运行 GPU。
 
 ## SAHI 边缘过滤（2026-10-28）
 
