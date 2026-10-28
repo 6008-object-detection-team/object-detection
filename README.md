@@ -2,7 +2,68 @@
 
 基于 PySide6、Ultralytics YOLOE、Grounding DINO Tiny、ByteTrack 和 PyTorch 的桌面检测应用。支持摄像头、本地视频、单张图片和图片文件夹，重点是开放词汇检测、小目标、目标编号和暗光处理。
 
-本次功能更新、操作方法与验证范围见 [2026-10-13 更新汇总](PROJECT_UPDATE_SUMMARY_20261013.md)。说明中的本机个人测试照片不随源码上传。
+最新一轮是 2026-10-28 的整合更新，见下一节。2026-10-13 的功能更新、操作方法与验证范围见 [2026-10-13 更新汇总](PROJECT_UPDATE_SUMMARY_20261013.md)。说明中的本机个人测试照片不随源码上传。
+
+## 2026-10-28 整合更新：补齐章程中未交付的功能
+
+分支 `feat/final-features` 合并了四个功能分支：`feat/auto-annotation`、`feat/onnx-export`、`feat/realtime-benchmark`、`feat/lowlight-eval`。它们对应项目章程、8 月 31 日“后续方向”和中期报告中列出、此前没有交付的内容。下面四个同日章节和对应文档写有细节。那四节里的回归数量是各分支单独测得的，合并后的结果见本节末尾。
+
+### 更新日志（2026-10-28）
+
+- **新增** 第 4 页“自动标注”：图片文件夹逐张检测 → 人工接受 / 修改 / 拒绝 → 导出 YOLO / COCO。导出清单写明标签是“模型候选 + 人工审核”，不是人工真值。文件：`auto_annotation.py`、`auto_annotation_ui.py`，见 [自动标注说明](docs/AUTO_ANNOTATION.md)。
+- **新增** ONNX 导出与 ONNX Runtime CPU 对照工具：把固定类别的 YOLOE-26S 导出为 seg、det 或高宽动态 det；`OnnxRuntimeEngine` 只用 NumPy + ORT；对照 PyTorch 与 ORT 的 AP、逐框一致性、时延和内存。没有接入界面。文件：`tools/export_onnx.py`、`onnx_engine.py`、`tools/benchmark_onnx.py`、`requirements-onnx.txt`，见 [ONNX 导出说明](docs/ONNX_EXPORT.md)。
+- **新增** 无界面实时调度基准：用程序自己的摄像头路径比较 latest、fifo 和 10-06 之前的同步循环；输入为 30 FPS 回放或真实摄像头（只计时）。文件：`tools/benchmark_realtime.py`，见 [视频实时性说明](docs/VIDEO_REALTIME.md#实测结果2026-10-28)。
+- **新增** 合成暗光定量评价：84 图、277 个人工框，4 级合成暗光，5 种条件，配对 bootstrap 区间。文件：`tools/evaluate_lowlight.py`，见 [暗光定量评价](docs/LOWLIGHT_EVAL.md)。
+- **没有改动**：`engines.py`、`video_worker.py`、`live_video.py`、`enhancement.py`、`resource_safety.py` 的检测 / 视频 / 暗光 / 资源保护路径，默认参数，以及摄像头的 `CAP_PROP_BUFFERSIZE=1`。单模型、batch=1、3 GiB 推理预算、GPU 文件锁、不静默重试、不换设备的规则不变。权重、`.onnx`、实验输出和日志都不提交。
+
+### 功能状态（本轮新增部分）
+
+| 功能 | 形式 | 已验证 | 未验证 | 开发中 |
+| --- | --- | --- | --- | --- |
+| 自动标注（第 4 页） | 界面 | 25 项 mock / offscreen 测试；本机 CPU 用 YOLOE-26S 对 `mini_eval` 前 5 张图真实运行文字、无提示（26S-PF）和视觉提示三种模式；导出的 COCO 可被 pycocotools 载入，YOLO 标签可被 Ultralytics 数据集读取器读取（审核由脚本模拟） | 本页的 CUDA 和 DINO、大文件夹、真人标注效率、候选框精度、用导出数据训练 | 审核进度保存到磁盘 |
+| ONNX 导出 / ORT 引擎 | 命令行工具 + 引擎类 | 同输入几何下 ORT 与 PyTorch 逐框一致（分数差 < 5e-6，AP 相同）；高宽动态 det 图与界面路径 AP 同为 0.5953；CPU 中位时延 2 线程 112.0 → 64.7 ms、8 线程 51.1 → 25.4 ms（同一主机、同一锁内背靠背、5 次重复） | onnxruntime-gpu / TensorRT、Windows、26S 以外的型号、FP16 / INT8、无提示和视觉提示导出、与 SAHI / 暗光 / 跟踪的组合 | 接入界面 |
+| 实时调度基准 | 命令行工具 | 一台笔记本（RTX 5060 Laptop）上回放与真实摄像头各组 3 次 × 30 秒；程序默认摄像头设置下三种调度的 FPS 和延迟没有可分辨的差异；CPU 慢于帧率时 fifo 延迟涨到数秒，latest 保持有界 | 组员 RTX 3060 / Windows DirectShow、Qt 绘制与屏幕刷新、有运动目标的场景、跳帧对 ByteTrack 的影响、任何精度指标 | — |
+| 暗光定量评价 | 命令行工具 | 本机 CUDA 完整运行 4 次，结果逐位一致；AP 从 0.455 降到 0.401 / 0.365 / 0.330 / 0.234，三种增强都没有可确认的 AP 提升（ΔAP 区间都含 0）；双路径在 AP 协议下与暗图相同 | 真实夜间 / 暗光视频的人工标注评价、其他模型、SAHI 组合、其他增强强度、240 图 10 类子集（图片未下载） | 带人工框的真实暗光测试集 |
+
+此前的功能（文字 / 视觉 / 无提示检测、DINO、SAHI、ByteTrack、暗光处理、录像、中英文界面、用户纠错）状态不变，见下文各日期章节。按这次合成暗光评价，没有证据支持“暗光处理提升检测率”；自适应增强目前更适合作为显示辅助。
+
+### 新工具的运行方法
+
+模型任务一次只运行一个：先在界面中“停止并释放模型 / 显存”。下面的输出目录在 `work/` 中，Git 已忽略。
+
+~~~bash
+# 自动标注：启动界面，进入第 4 页“自动标注”
+python main.py
+
+# ONNX：另装 onnx / onnxslim；导出只用 CPU，不覆盖已有文件；--plan 只打印计划，不加载模型
+python -m pip install -r requirements-onnx.txt
+python tools/export_onnx.py --plan --output-dir work/onnx_export --variants det --dynamic-hw
+python tools/export_onnx.py --output-dir work/onnx_export --variants det --dynamic-hw
+# 对照必须包含参考后端 pt_cpu_square；正式计时至少重复 3 次
+python tools/benchmark_onnx.py --onnx-det-rect work/onnx_export/yoloe-26s-det-mini_eval-640-dyn.onnx \
+  --backends pt_cpu_square,pt_cpu_rect,ort_cpu_det_rect --repeats 5 --threads 2 --output work/onnx_benchmark
+
+# 实时调度：30 FPS 回放 mini_eval；摄像头用 --source camera，只计时，每次最多 60 秒
+python tools/benchmark_realtime.py --source video --device cpu --repeats 3 --duration 30 --output-root work/realtime_benchmark
+python tools/benchmark_realtime.py --summarize work/realtime_benchmark/<会话目录>
+
+# 暗光评价：默认 CPU；--limit 2 --bootstrap-samples 50 可做冒烟检查
+python tools/evaluate_lowlight.py --device CUDA --output work/lowlight_eval
+~~~
+
+完整参数见各工具的 `--help` 和上面链接的文档。同一台 Linux 机器上同时有几个实验时，可用 `flock <锁文件> <命令>` 让模型任务串行。
+
+### 整合后回归（2026-10-28，Linux）
+
+在合并后的 `feat/final-features` 上运行：
+
+~~~bash
+QT_QPA_PLATFORM=offscreen python -m unittest discover -q
+~~~
+
+结果：**405 项，404 通过、0 失败、1 项因缺少完整 COCO 原始标注缓存跳过**。`python -m pytest -q` 结果相同：404 通过、1 跳过。合并前的 `main`（`da76f36`）在同一环境、同一命令下为 308 项：307 通过、0 失败、1 跳过，跳过的是同一项。新增的 97 项是自动标注 25、ONNX 28、实时调度 30、暗光评价 14。原有 308 项逐项结果与合并前相同。
+
+环境：Ubuntu 26.04 / Linux 7.0，Python 3.12.13 虚拟环境，torch 2.9.1+cu128，Ultralytics 8.4.172，PySide6 6.12.0，NumPy 2.5.2，OpenCV 5.0.0，onnxruntime 1.31.1（CPU），pycocotools 2.0.11，SAHI 0.12.8；GPU 为 RTX 5060 Laptop（8 GiB）。这些版本和下文“安装”一节记录的 Conda 6008 环境（Python 3.10.21、NumPy 1.26.4、OpenCV 4.11 等）不同，结果不能互相代替。以前各轮记录的回归结果保持原样。
 
 ## 2026-10-28 第 4 页：文件夹自动标注
 
@@ -238,5 +299,7 @@ python -m unittest discover -q
 ~~~
 
 完整本地合并版已验证 199 项回归：198 项通过，1 项因缺少完整 COCO 原始标注缓存跳过。真实 CUDA 五路径，以及 Qt 图片文件夹、短视频、目标编号和模型切换验证通过。公开发布目录又重跑了全部 199 项，结果同为 198 通过、1 跳过；依赖检查和 Qt 启动也通过，13 个核心运行文件与实测合并版逐字节一致。冷启动计时和单图 0 框结果不用于宣称速度或精度提升。
+
+2026-10-28（Linux，合并后的 `feat/final-features`）：`QT_QPA_PLATFORM=offscreen python -m unittest discover -q` 共 405 项，404 通过、1 项因缺少完整 COCO 原始标注缓存跳过；同一环境下合并前的 `main` 为 308 项，307 通过、1 跳过。环境是 Ubuntu 26.04、Python 3.12.13 虚拟环境、torch 2.9.1+cu128、Ultralytics 8.4.172、RTX 5060 Laptop，详见开头的整合更新。上面的 199 项和 2026-10-13 的 308 项结果保持原样，不被这组数字代替。
 
 2026-10-07 合并轮未验证真实摄像头优化前后性能、长时录像、完整 COCO 精度或训练；摄像头前后性能已于 2026-10-28 在一台笔记本上补测（见上文），组员电脑仍未测。2026-10-12 已接入上述纠错与独立训练第一版，并实现全局中英文界面切换，但没有真实照片精度结论。2026-10-28 起第 4 页自动标注可用，范围与未验证项见上文。add picture.py 和 build 是旧版内容，不是当前入口；运行新版不需要 restore_large_files.py 还原历史打包文件。
