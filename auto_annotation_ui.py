@@ -4,14 +4,15 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, QThread, Signal, QSignalBlocker
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
+from PySide6.QtCore import QCoreApplication, QThread, Qt, Signal, QSignalBlocker
+from PySide6.QtGui import QColor, QKeySequence, QShortcut
+from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
     QComboBox, QCheckBox, QListWidget, QProgressBar, QDoubleSpinBox, QSplitter)
 
 from app_utils import parse_prompts
-from auto_annotation import (AnnotationSession, detect_candidates, export_coco, export_yolo,
-                             read_image_with_sha, weights_sha256)
+from auto_annotation import (AnnotationSession, delete_session_file, detect_candidates, export_coco,
+                             export_yolo, read_image_with_sha, read_session_file, session_cache_path,
+                             weights_sha256, write_session)
 from engines import PromptFreeEngine
 from feedback_ui import CorrectionCanvas
 from prompt_modes import resolve_detection_model
@@ -245,21 +246,24 @@ class AutoAnnotationPanel(QWidget):
         right_layout.addWidget(self.category)
         self.mode = QComboBox()
         self.mode.addItems(["选择 / 拖动现有框", "拖拽补框（或删除旧框后重画）"])
+        self.mode.setToolTip("D 键切换选择 / 拖动现有框与拖拽补框两种模式。")
         self.mode.currentIndexChanged.connect(lambda index: setattr(self.canvas, "mode", "draw" if index else "select"))
         right_layout.addWidget(self.mode)
         self.box_list = QListWidget()
         self.box_list.currentRowChanged.connect(self.select_box)
         right_layout.addWidget(self.box_list, 1)
         self.delete_button = QPushButton("删除所选误检框")
+        self.delete_button.setToolTip("删除左侧列表中选中的框。快捷键 Delete。")
         self.delete_button.clicked.connect(self.canvas.delete_selected)
         right_layout.addWidget(self.delete_button)
         self.accept_button = QPushButton("接受本图")
-        self.accept_button.setToolTip("采用当前全部框（含未修改的候选）；有改动时记为“已修改”。随后跳到下一张待审图片。")
+        self.accept_button.setToolTip("采用当前全部框（含未修改的候选）；有改动时记为“已修改”。随后跳到下一张待审图片。快捷键 A。")
         self.accept_button.clicked.connect(self.accept_current)
         self.reject_button = QPushButton("拒绝本图（不导出）")
+        self.reject_button.setToolTip("本图不导出，随后跳到下一张待审图片。快捷键 R。")
         self.reject_button.clicked.connect(self.reject_current)
         self.reset_button = QPushButton("恢复模型候选")
-        self.reset_button.setToolTip("放弃本图的人工修改，恢复模型候选框并改回待审。")
+        self.reset_button.setToolTip("放弃本图的人工修改，恢复模型候选框并改回待审。快捷键 U。")
         self.reset_button.clicked.connect(self.reset_current)
         for button in (self.accept_button, self.reject_button, self.reset_button):
             right_layout.addWidget(button)
@@ -295,6 +299,7 @@ class AutoAnnotationPanel(QWidget):
         self.min_score.setValue(0.0)
         self.min_score.setToolTip("只过滤“按分数批量接受”（未逐张查看）的图片中低于该分数的框；逐张接受或修改的图片按人工结果导出。批量接受的图片若没有框达到该分数则不导出。")
         self.export_yolo_button = QPushButton("导出 YOLO…")
+        self.export_yolo_button.setToolTip("快捷键 Ctrl+E（导出 YOLO）。")
         self.export_yolo_button.clicked.connect(lambda: self.export("yolo"))
         self.export_coco_button = QPushButton("导出 COCO…")
         self.export_coco_button.clicked.connect(lambda: self.export("coco"))
@@ -305,12 +310,19 @@ class AutoAnnotationPanel(QWidget):
         export_row.addWidget(self.export_yolo_button)
         export_row.addWidget(self.export_coco_button)
         root.addLayout(export_row)
+        self.shortcuts_hint = QLabel(
+            "快捷键：A 接受本图 · R 拒绝本图 · U 恢复模型候选 · Delete 删除所选框 · "
+            "N / P 下一张 / 上一张图片 · D 切换画框 / 选择模式 · Ctrl+E 导出 YOLO。"
+            "输入框获得焦点时快捷键不生效。")
+        self.shortcuts_hint.setWordWrap(True)
+        root.addWidget(self.shortcuts_hint)
         self.summary = QLabel()
         self.summary.setWordWrap(True)
         root.addWidget(self.summary)
 
         self.canvas.changed.connect(self.on_canvas_changed)
         self.canvas.selected.connect(self.box_list.setCurrentRow)
+        self._build_shortcuts()
         self.update_summary()
         self.update_controls()
 
@@ -330,6 +342,54 @@ class AutoAnnotationPanel(QWidget):
         """Routine progress stays in the page and status bar, without dialogs."""
         self._bind(self.status_label, value)
         self.app.show_status(value)
+
+    # Keyboard shortcuts (C1) ----------------------------------------------
+    @staticmethod
+    def _shortcut_blocked():
+        """True while the focused widget is a text field: its own keys win."""
+        widget = QApplication.focusWidget()
+        if widget is None:
+            return False
+        if isinstance(widget, QLineEdit):
+            return True
+        return isinstance(widget, QComboBox) and widget.isEditable()
+
+    def _guarded(self, handler):
+        def activated():
+            if not self._shortcut_blocked():
+                handler()
+        return activated
+
+    def _build_shortcuts(self):
+        """QShortcut on the page itself: scoped to this tab, never a text field."""
+        bindings = (("A", self.accept_current), ("R", self.reject_current), ("U", self.reset_current),
+                   (QKeySequence.Delete, self.canvas.delete_selected), ("N", lambda: self._move_selection(1)),
+                   ("P", lambda: self._move_selection(-1)), ("D", self._toggle_draw_mode),
+                   ("Ctrl+E", self._export_shortcut))
+        self._shortcuts = []
+        for key, handler in bindings:
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(self._guarded(handler))
+            self._shortcuts.append(shortcut)
+
+    def _move_selection(self, offset):
+        if self.session is None or not len(self.session):
+            return
+        count = len(self.session)
+        row = self.image_list.currentRow()
+        self.image_list.setCurrentRow((row + offset) % count if row >= 0 else 0)
+
+    def _toggle_draw_mode(self):
+        if self.entry() is None:
+            return
+        self.mode.setCurrentIndex(0 if self.mode.currentIndex() else 1)
+
+    def _export_shortcut(self):
+        if self.export_yolo_button.isEnabled():
+            self.export_yolo_button.click()
+        elif self.export_coco_button.isEnabled():
+            self.export_coco_button.click()
 
     @property
     def running(self):
@@ -433,6 +493,45 @@ class AutoAnnotationPanel(QWidget):
                 count=unreviewed)) == QMessageBox.Yes
         return True
 
+    # Session auto-save / resume (C2) --------------------------------------
+    def _maybe_resume(self, session, folder):
+        """Offer to restore a previously saved review session for *folder*."""
+        try:
+            data = read_session_file(session_cache_path(folder))
+        except ValueError as exc:
+            self.notify(message("已忽略损坏的标注进度文件：{error}", error=exception_message(exc)))
+            return session
+        if not data:
+            return session
+        reviewed = sum(1 for raw in data.get("entries", [])
+                       if isinstance(raw, dict) and (raw.get("state") not in (None, "pending") or raw.get("detected")))
+        if not reviewed:
+            return session
+        if QMessageBox.question(self, "恢复标注进度", message(
+                "检测到本文件夹上次自动标注保存的审核进度（约 {count} 张已审核或已检测），是否恢复？"
+                "图片内容发生变化的会重新标为待审，不会沿用旧候选框。", count=reviewed)) != QMessageBox.Yes:
+            return session
+        try:
+            resumed = AnnotationSession.from_dict(data, folder, recursive=session.recursive)
+        except ValueError as exc:
+            self.notify(message("恢复失败，已忽略进度文件：{error}", error=exception_message(exc)))
+            return session
+        if resumed.changed_count:
+            self.notify(message("已恢复 {restored} 张图片的审核进度；{changed} 张图片内容已变化，重新标为待审。",
+                                restored=resumed.restored_count, changed=resumed.changed_count))
+        else:
+            self.notify(message("已恢复 {restored} 张图片的审核进度。", restored=resumed.restored_count))
+        return resumed
+
+    def _autosave(self):
+        """Persist the review session after each human decision; never blocks review."""
+        if self.session is None:
+            return
+        try:
+            write_session(self.session)
+        except OSError as exc:
+            self.notify(message("标注进度未能保存：{error}", error=exception_message(exc)))
+
     def load_folder(self, folder):
         if self.running or not self.may_discard():
             return False
@@ -444,6 +543,7 @@ class AutoAnnotationPanel(QWidget):
         if not len(session):
             self.notify(message("所选文件夹中没有 JPG、JPEG、PNG 或 BMP 图片。"))
             return False
+        session = self._maybe_resume(session, folder)
         self.session, self.current = session, -1
         session.set_classes(parse_prompts(self.class_input.text()))
         self._bind(self.folder_label, message("{folder}（{count} 张图片）", folder=str(session.folder), count=len(session)))
@@ -752,6 +852,7 @@ class AutoAnnotationPanel(QWidget):
         self.rebuild_boxes()
         self.update_summary()
         self.update_controls()
+        self._autosave()
 
     def _next_pending(self, start):
         entries = self.session.entries
@@ -768,6 +869,7 @@ class AutoAnnotationPanel(QWidget):
         if following >= 0 and following != index:
             self.image_list.setCurrentRow(following)
         self.update_controls()
+        self._autosave()
 
     def accept_current(self):
         if self.entry() is None:
@@ -799,6 +901,7 @@ class AutoAnnotationPanel(QWidget):
         self.rebuild_boxes()
         self.update_summary()
         self.update_controls()
+        self._autosave()
 
     def bulk_accept(self):
         if self.session is None or self.running:
@@ -820,12 +923,14 @@ class AutoAnnotationPanel(QWidget):
             self.rebuild_boxes()
         self.update_summary()
         self.update_controls()
+        self._autosave()
         self.notify(message("已批量接受 {count} 张图片（阈值 {score:.2f}）。", count=accepted, score=threshold))
 
     # Export --------------------------------------------------------------
     def export(self, fmt):
         if self.session is None or self.running:
             return
+        exported = False
         try:
             self.apply_class_order()
             parent = QFileDialog.getExistingDirectory(
@@ -835,6 +940,7 @@ class AutoAnnotationPanel(QWidget):
             self._export_parent = parent
             target = Path(parent) / f"auto_labels_{fmt}_{datetime.now():%Y%m%d_%H%M%S}"
             result = (export_yolo if fmt == "yolo" else export_coco)(self.session, target, self.min_score.value())
+            exported = True
             values = dict(format=fmt.upper(), images=result["images"], boxes=result["boxes"],
                           classes=len(result["classes"]), path=str(result["path"]))
             if result["skipped"]:
@@ -844,5 +950,17 @@ class AutoAnnotationPanel(QWidget):
                 self.notify(message("已导出 {format}：{images} 张图片、{boxes} 个框、{classes} 个类别 → {path}", **values))
         except Exception as exc:
             self.notify(message("导出未完成：{error}", error=exception_message(exc)))
+        if exported:
+            self._offer_clear_progress(fmt)
         self.update_summary()
         self.update_controls()
+
+    def _offer_clear_progress(self, fmt):
+        """After a successful export, let the user drop the saved review progress."""
+        path = session_cache_path(self.session.folder)
+        if not path.is_file():
+            return
+        if QMessageBox.question(self, "清除本地进度", message(
+                "已导出 {format}。是否清除本地保存的审核进度文件？清除后关闭或重开文件夹不会再提供恢复。",
+                format=fmt.upper())) == QMessageBox.Yes:
+            delete_session_file(self.session.folder, path)

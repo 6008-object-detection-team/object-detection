@@ -13,13 +13,16 @@ from unittest.mock import MagicMock, patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import cv2
 import numpy as np
-from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtCore import QCoreApplication, QEvent, Qt
+from PySide6.QtGui import QKeySequence
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (QApplication, QAbstractButton, QComboBox, QLabel, QLineEdit,
                                QMessageBox as QtMessageBox, QWidget)
 
 from auto_annotation import (LABEL_PROVENANCE, MANIFEST_NAME, AnnotationSession, box_origin, coco_bbox,
-                             detect_candidates, export_coco, export_yolo, read_image_with_sha,
-                             scan_folder, yolo_line)
+                             delete_session_file, detect_candidates, export_coco, export_yolo,
+                             read_image_with_sha, read_session_file, scan_folder, session_cache_path,
+                             write_session, yolo_line)
 from detection_utils import Detection
 from i18n import EN, render
 from resource_safety import ResourceLimitError
@@ -587,6 +590,10 @@ class AutoAnnotationTabTests(unittest.TestCase):
         self.folder = self.root / "待标注"
         for index in range(3):
             write_image(self.folder / f"图{index}.png", value=index * 50)
+        # Keep autosaved session files inside this test's own temp directory,
+        # never in the real project's .cache/ (shared by other agents/runs).
+        os.environ["EE6008_ANNOTATION_CACHE_DIR"] = str(self.root / "_annotation_cache")
+        self.addCleanup(os.environ.pop, "EE6008_ANNOTATION_CACHE_DIR", None)
         self.window = self.AIApp()
         self.panel = self.window.annotation_panel
         self.window.show()
@@ -806,7 +813,8 @@ class AutoAnnotationTabTests(unittest.TestCase):
         self.assertEqual(panel.session.entries[2].review_method, "bulk_min_score")
         self.assertEqual(len(panel.session.entries[2].boxes), 1)
         out = self.root / "导出"
-        with patch("auto_annotation_ui.QFileDialog.getExistingDirectory", return_value=str(out)):
+        with patch("auto_annotation_ui.QFileDialog.getExistingDirectory", return_value=str(out)), \
+                patch("auto_annotation_ui.QMessageBox.question", return_value=QtMessageBox.No):
             panel.export("yolo")
             panel.export("coco")
         exports = sorted(out.iterdir())
@@ -970,6 +978,261 @@ class AutoAnnotationTabTests(unittest.TestCase):
         self.assertIn("1 skipped", panel.status_label.text())
         # Starting again retries the skipped image (e.g. after choosing a larger slice size).
         self.assertIn(1, [index for index, _ in panel.session.targets(None)])
+    # C1: keyboard shortcuts ------------------------------------------------
+    def focus_and_press(self, widget, key, modifier=Qt.NoModifier):
+        # A WidgetWithChildrenShortcut only fires while its tab is the active
+        # one (an inactive QTabWidget page cannot really hold focus).
+        self.window.tabs.setCurrentWidget(self.panel)
+        widget.setFocus()
+        self.qt_app.processEvents()
+        QTest.keyClick(widget, key, modifier)
+        self.qt_app.processEvents()
+
+    def test_a_accepts_and_r_rejects_but_not_while_a_text_field_has_focus(self):
+        panel = self.panel
+        self.window.tabs.setCurrentWidget(panel)
+        panel.load_folder(self.folder)
+        self.simulate_detection(0)
+        self.simulate_detection(1)
+        self.focus_and_press(panel.image_list, Qt.Key_A)
+        self.assertEqual(panel.session.entries[0].state, "accepted")
+        self.assertEqual(panel.current, 1)  # Accept auto-advances to the next pending image.
+        self.focus_and_press(panel.image_list, Qt.Key_R)
+        self.assertEqual(panel.session.entries[1].state, "rejected")
+        # Typing "a" into a text field must not also fire Accept.
+        self.simulate_detection(2)
+        panel.class_input.clear()
+        self.focus_and_press(panel.class_input, Qt.Key_A)
+        self.assertEqual(panel.session.entries[2].state, "pending")
+        self.assertEqual(panel.class_input.text(), "a")
+
+    def test_u_restores_model_candidates_but_not_while_a_text_field_has_focus(self):
+        panel = self.panel
+        self.window.tabs.setCurrentWidget(panel)
+        panel.load_folder(self.folder)
+        self.simulate_detection(0)
+        panel.canvas.index = 0
+        panel.canvas.delete_selected()
+        self.assertTrue(panel.entry(0).modified)
+        panel.class_input.setFocus()
+        self.qt_app.processEvents()
+        QTest.keyClick(panel.class_input, Qt.Key_U)
+        self.qt_app.processEvents()
+        self.assertTrue(panel.entry(0).modified)  # the text field ate the "u", nothing restored
+        self.focus_and_press(panel.image_list, Qt.Key_U)
+        self.assertEqual(panel.session.entries[0].state, "pending")
+        self.assertEqual(len(panel.canvas.boxes), len(panel.session.entries[0].candidates))
+
+    def test_delete_shortcut_removes_the_selected_box_but_text_fields_keep_their_own_delete(self):
+        panel = self.panel
+        self.window.tabs.setCurrentWidget(panel)
+        panel.load_folder(self.folder)
+        self.simulate_detection(0)
+        panel.canvas.index = 0
+        count = len(panel.canvas.boxes)
+        self.focus_and_press(panel.image_list, Qt.Key_Delete)
+        self.assertEqual(len(panel.canvas.boxes), count - 1)
+        panel.class_input.setText("bottle")
+        panel.class_input.setCursorPosition(0)
+        before = len(panel.canvas.boxes)
+        self.focus_and_press(panel.class_input, Qt.Key_Delete)
+        self.assertEqual(len(panel.canvas.boxes), before)
+        self.assertEqual(panel.class_input.text(), "ottle")
+
+    def test_n_and_p_navigate_images_and_wrap(self):
+        panel = self.panel
+        panel.load_folder(self.folder)
+        panel.image_list.setCurrentRow(0)
+        self.focus_and_press(panel.image_list, Qt.Key_N)
+        self.assertEqual(panel.image_list.currentRow(), 1)
+        self.focus_and_press(panel.image_list, Qt.Key_P)
+        self.assertEqual(panel.image_list.currentRow(), 0)
+        self.focus_and_press(panel.image_list, Qt.Key_P)
+        self.assertEqual(panel.image_list.currentRow(), 2)  # wraps to the last image
+
+    def test_d_toggles_draw_select_mode(self):
+        panel = self.panel
+        panel.load_folder(self.folder)
+        self.simulate_detection(0)
+        self.assertEqual(panel.mode.currentIndex(), 0)
+        self.focus_and_press(panel.image_list, Qt.Key_D)
+        self.assertEqual(panel.mode.currentIndex(), 1)
+        self.assertEqual(panel.canvas.mode, "draw")
+        self.focus_and_press(panel.image_list, Qt.Key_D)
+        self.assertEqual(panel.mode.currentIndex(), 0)
+        self.assertEqual(panel.canvas.mode, "select")
+
+    def test_ctrl_e_exports_but_not_while_a_text_field_has_focus(self):
+        panel = self.panel
+        panel.load_folder(self.folder)
+        self.simulate_detection(0)
+        panel.accept_current()
+        out = self.root / "导出快捷键"
+        with patch("auto_annotation_ui.QFileDialog.getExistingDirectory", return_value=str(out)) as chooser, \
+                patch("auto_annotation_ui.QMessageBox.question", return_value=QtMessageBox.No):
+            self.focus_and_press(panel.image_list, Qt.Key_E, Qt.ControlModifier)
+        chooser.assert_called_once()
+        with patch("auto_annotation_ui.QFileDialog.getExistingDirectory") as chooser:
+            panel.class_input.setFocus()
+            self.qt_app.processEvents()
+            QTest.keyClick(panel.class_input, Qt.Key_E, Qt.ControlModifier)
+            self.qt_app.processEvents()
+        chooser.assert_not_called()
+
+    def test_shortcut_hint_is_shown_and_fully_translated(self):
+        panel = self.panel
+        self.assertIn("Ctrl+E", panel.shortcuts_hint.text())
+        self.switch("en")
+        text = panel.shortcuts_hint.text()
+        self.assertIsNone(HAN.search(text))
+        self.assertIn("Ctrl+E", text)
+        self.assertIn("shortcut", panel.accept_button.toolTip().lower())
+
+    # C2: auto-save / resume -------------------------------------------------
+    def test_autosave_after_each_decision_offers_resume_on_reopen(self):
+        panel = self.panel
+        panel.load_folder(self.folder)
+        self.simulate_detection(0)
+        panel.accept_current()
+        path = session_cache_path(self.folder)
+        self.assertTrue(path.is_file())
+        saved = read_session_file(path)
+        self.assertEqual(saved["entries"][0]["state"], "accepted")
+        panel.session = None
+        with patch("auto_annotation_ui.QMessageBox.question", return_value=QtMessageBox.Yes) as question:
+            self.assertTrue(panel.load_folder(self.folder))
+        question.assert_called_once()
+        self.assertEqual(panel.session.entries[0].state, "accepted")
+        self.assertEqual(panel.session.restored_count, 3)  # all 3 images' fingerprints still match
+        self.assertEqual(panel.session.changed_count, 0)
+
+    def test_declining_resume_keeps_a_fresh_session(self):
+        panel = self.panel
+        panel.load_folder(self.folder)
+        self.simulate_detection(0)
+        panel.accept_current()
+        panel.session = None
+        with patch("auto_annotation_ui.QMessageBox.question", return_value=QtMessageBox.No):
+            panel.load_folder(self.folder)
+        self.assertEqual(panel.session.entries[0].state, "pending")
+
+    def test_corrupted_progress_file_is_ignored_and_reported(self):
+        panel = self.panel
+        path = session_cache_path(self.folder)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("not json", encoding="utf-8")
+        with patch.object(panel, "notify", wraps=panel.notify) as notify:
+            self.assertTrue(panel.load_folder(self.folder))
+        messages = [str(call.args[0]) for call in notify.call_args_list]
+        self.assertTrue(any("已忽略损坏的标注进度文件" in value for value in messages), messages)
+
+    def test_export_offers_to_clear_saved_progress(self):
+        panel = self.panel
+        panel.load_folder(self.folder)
+        self.simulate_detection(0)
+        panel.accept_current()
+        path = session_cache_path(self.folder)
+        self.assertTrue(path.is_file())
+        out = self.root / "导出"
+        with patch("auto_annotation_ui.QFileDialog.getExistingDirectory", return_value=str(out)), \
+                patch("auto_annotation_ui.QMessageBox.question", return_value=QtMessageBox.Yes) as question:
+            panel.export("yolo")
+        question.assert_called_once()
+        self.assertFalse(path.is_file())
+
+    def test_declining_to_clear_progress_keeps_the_file(self):
+        panel = self.panel
+        panel.load_folder(self.folder)
+        self.simulate_detection(0)
+        panel.accept_current()
+        path = session_cache_path(self.folder)
+        out = self.root / "导出2"
+        with patch("auto_annotation_ui.QFileDialog.getExistingDirectory", return_value=str(out)), \
+                patch("auto_annotation_ui.QMessageBox.question", return_value=QtMessageBox.No):
+            panel.export("yolo")
+        self.assertTrue(path.is_file())
+
+
+class SessionPersistenceTests(unittest.TestCase):
+    """C2: AnnotationSession.to_dict / from_dict round trip and resume safety."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        os.environ["EE6008_ANNOTATION_CACHE_DIR"] = str(self.root / "_cache")
+        self.addCleanup(os.environ.pop, "EE6008_ANNOTATION_CACHE_DIR", None)
+        self.folder = self.root / "图片"
+
+    def test_round_trip_restores_candidates_boxes_states_classes_and_runs(self):
+        session = detected_session(self.folder, count=2)
+        session.set_classes(["bottle", "cup"])
+        session.accept(0)
+        session.reject(1)
+        data = session.to_dict()
+        self.assertEqual(data["schema"], "ee6008-auto-annotation-session/1")
+        restored = AnnotationSession.from_dict(data, self.folder, recursive=False)
+        self.assertEqual((restored.restored_count, restored.changed_count), (2, 0))
+        self.assertEqual([entry.state for entry in restored.entries], ["accepted", "rejected"])
+        self.assertEqual(restored.entries[0].boxes, session.entries[0].boxes)
+        self.assertEqual(restored.entries[0].candidates, session.entries[0].candidates)
+        self.assertEqual(restored.classes, ["bottle", "cup"])
+        self.assertTrue(restored.dirty)
+
+    def test_write_and_read_session_file_round_trip_then_delete(self):
+        session = detected_session(self.folder, count=2)
+        session.accept(0)
+        path = write_session(session)
+        self.assertTrue(path.is_file())
+        restored = AnnotationSession.from_dict(read_session_file(path), self.folder, recursive=False)
+        self.assertEqual(restored.entries[0].state, "accepted")
+        delete_session_file(self.folder, path)
+        self.assertIsNone(read_session_file(path))
+
+    def test_missing_cache_file_returns_none(self):
+        self.assertIsNone(read_session_file(session_cache_path(self.folder)))
+
+    def test_changed_image_is_not_resumed_with_stale_candidates(self):
+        session = detected_session(self.folder, count=2)
+        session.accept(0)
+        session.accept(1)
+        data = session.to_dict()
+        time.sleep(0.01)  # ensure a different mtime
+        write_image(self.folder / "img0.png", value=250)
+        restored = AnnotationSession.from_dict(data, self.folder, recursive=False)
+        self.assertEqual((restored.restored_count, restored.changed_count), (1, 1))
+        changed = next(entry for entry in restored.entries if entry.relative == "img0.png")
+        self.assertEqual(changed.state, "pending")
+        self.assertEqual(changed.boxes, [])
+        self.assertFalse(changed.detected)
+        unchanged = next(entry for entry in restored.entries if entry.relative == "img1.png")
+        self.assertEqual(unchanged.state, "accepted")
+
+    def test_corrupted_json_syntax_raises_value_error(self):
+        path = self.root / "bad.json"
+        path.write_text("not json {{{", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            read_session_file(path)
+
+    def test_wrong_schema_is_rejected(self):
+        with self.assertRaises(ValueError):
+            AnnotationSession.from_dict({"schema": "something-else", "entries": [], "runs": [], "classes": []},
+                                        self.folder, recursive=False)
+
+    def test_missing_required_field_is_rejected(self):
+        with self.assertRaises(ValueError):
+            AnnotationSession.from_dict({"schema": "ee6008-auto-annotation-session/1"}, self.folder, recursive=False)
+
+    def test_corrupted_single_entry_is_skipped_not_fatal(self):
+        session = detected_session(self.folder, count=2)
+        session.accept(0)
+        session.accept(1)
+        data = session.to_dict()
+        data["entries"][0]["candidates"] = [{"label": "", "xyxy": [1]}]  # malformed: empty label, short xyxy
+        restored = AnnotationSession.from_dict(data, self.folder, recursive=False)
+        self.assertEqual((restored.restored_count, restored.changed_count), (1, 1))
+        self.assertEqual(restored.entries[0].state, "pending")
+        self.assertEqual(restored.entries[1].state, "accepted")
 
 
 if __name__ == "__main__":
