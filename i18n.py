@@ -480,6 +480,8 @@ EN = {
     "冻结的骨干/文字/视觉/分割模块发生变化，拒绝注册": "Registration refused: a frozen backbone/text/visual/segmentation module changed.",
     "已保存版本没有有效检测头更新或改变了冻结模块，拒绝注册": "Registration refused: no valid detection-head update, or a frozen module changed.",
     "父模型被外部修改；拒绝注册": "Registration refused: the parent model was changed externally.",
+    # --- imp/live ---
+    "检测运行中修改目标：停止输入约 0.4 秒后应用，按 Enter 立即应用。": "While detection runs, edited targets apply about 0.4 s after you stop typing; press Enter to apply at once.",
 }
 
 

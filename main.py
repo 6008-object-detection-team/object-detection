@@ -12,7 +12,7 @@ if sys.platform == "win32":
         _dll_directory = os.add_dll_directory(dll_dir)
 
 import numpy as np
-from PySide6.QtCore import Qt, Slot, QSignalBlocker
+from PySide6.QtCore import Qt, Slot, QSignalBlocker, QTimer
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QMainWindow
 
@@ -60,6 +60,12 @@ class AIApp(QMainWindow):
         self._feedback_cached = None
         self._feedback_versions = {}
         self.ui_language = UiLanguage(self)
+        # Typing re-encodes the prompt classes once, after a pause, instead of on
+        # every key; Enter applies at once (ui.py). See update_worker_classes.
+        self.prompt_apply_timer = QTimer(self)
+        self.prompt_apply_timer.setSingleShot(True)
+        self.prompt_apply_timer.setInterval(400)
+        self.prompt_apply_timer.timeout.connect(self.update_worker_classes)
         build_ui(self)
         self.ui_language.capture(self)
         self._update_model_indicator()
@@ -318,7 +324,16 @@ class AIApp(QMainWindow):
         self.engine.imgsz = self.resolution_combo.currentData()
         return True
 
-    def update_worker_classes(self, text):
+    def update_worker_classes(self, text=None):
+        """Apply the prompt box to a running text-tab detection.
+
+        Runs when typing pauses (prompt_apply_timer) or on Enter, so a typed
+        word re-encodes the classes and restarts track numbering once, not once
+        per key, and half-typed prompts never reach the model.
+        """
+        self.prompt_apply_timer.stop()
+        if text is None:
+            text = self.prompt_input.text()
         prompts = parse_prompts(text)
         text_active = self.current_video_label is getattr(self, "video_label_tab1", None)
         if text_active and (self.worker or self.active_detection_request):
