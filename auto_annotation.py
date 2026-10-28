@@ -233,12 +233,15 @@ class AnnotationSession:
         self.runs[run_index].update(values, finished_at=now_iso())
 
     def targets(self, config):
-        """Pending, untouched images that lack candidates for this exact configuration."""
+        """Pending, untouched images that lack candidates for this exact configuration.
+
+        ``config=None`` (configuration not known yet) returns every pending, untouched image.
+        """
         result = []
         for index, entry in enumerate(self.entries):
             if entry.state != "pending" or entry.modified:
                 continue
-            same = entry.detected and entry.run_index is not None and \
+            same = config is not None and entry.detected and entry.run_index is not None and \
                 self.runs[entry.run_index].get("config") == config
             if entry.error or not same:
                 result.append((index, entry.path))

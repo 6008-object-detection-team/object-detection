@@ -14,6 +14,7 @@ from auto_annotation import (AnnotationSession, detect_candidates, export_coco, 
                              read_image_with_sha, weights_sha256)
 from engines import PromptFreeEngine
 from feedback_ui import CorrectionCanvas
+from prompt_modes import resolve_detection_model
 from i18n import message, exception_message, render
 from resource_safety import MAX_SOURCE_PIXELS
 from ui_language import QFileDialog, QMessageBox, language_for
@@ -425,6 +426,18 @@ class AutoAnnotationPanel(QWidget):
                 return
             label = app.ref_class_input.text().strip() or "object"
             reference, prompts = (prompt[0], prompt[1], label), [label]
+        visual_record = None
+        if reference is not None:
+            from feedback import image_id
+            visual_record = {"reference_image_sha256": image_id(reference[0]),
+                             "box_xyxy": [float(value) for value in reference[1]], "label": reference[2]}
+        # Nothing to detect: say so before stopping the live stream or loading weights.
+        planned = self._planned_identity(prompts, visual, visual_record)
+        provisional = None if planned is None else self._run_config(
+            self._run_options(prompts, "visual" if visual else "text" if prompts else "prompt_free"), planned)
+        if not self.session.targets(provisional):
+            self.notify(message("没有需要检测的待审图片；已审核或已改动的图片不会被覆盖。"))
+            return
         # One model, serial tasks: the live detection worker stops first.
         if not app.stop_video_stream():
             self.notify(message("正在等待当前模型推理完成，请稍后再操作…"))
@@ -445,24 +458,11 @@ class AutoAnnotationPanel(QWidget):
             self.notify(message("无提示检测需要 YOLOE 无提示权重；不会用固定类别代替。"))
             return
         mode = "visual" if visual else "prompt_free" if prompt_free else "text"
-        options = {
-            "mode": mode, "class_names": [] if prompt_free else prompts,
-            "conf": app.conf_slider.value() / 100.0, "iou": 0.45, "max_det": app.max_det_spin.value(),
-            "imgsz": app.resolution_combo.currentData(), "tiled": app.tile_checkbox.isChecked(),
-            "sliced": app.sahi_checkbox.isChecked(), "slice_size": app.slice_size_combo.currentData(),
-            "slice_overlap": 0.2, "max_slices": 9, "low_light": app.dce_checkbox.isChecked(),
-            "supplement_dark": bool(app.dark_mode_combo.currentData()),
-            "enhancement_strength": app.strength_slider.value() / 100.0,
-        }
-        visual_record = None
-        if reference is not None:
-            from feedback import image_id
-            visual_record = {"reference_image_sha256": image_id(reference[0]),
-                             "box_xyxy": [float(value) for value in reference[1]], "label": reference[2]}
+        options = self._run_options(prompts, mode)
         identity = {"model": app.active_model_path, "model_sha256": app.active_model_sha256,
                     "device": str(engine.device), "visual_reference": visual_record,
                     "inference_options": engine.inference_options}
-        config = json.dumps(dict(options, **identity), sort_keys=True, ensure_ascii=False)
+        config = self._run_config(options, identity)
         jobs = self.session.targets(config)
         if not jobs:
             self.notify(message("没有需要检测的待审图片；已审核或已改动的图片不会被覆盖。"))
@@ -493,6 +493,39 @@ class AutoAnnotationPanel(QWidget):
         self.update_controls()
         self.notify(message("自动标注已开始：{count} 张图片，逐张串行。", count=len(jobs)))
         worker.start()
+
+    def _run_options(self, prompts, mode):
+        app = self.app
+        return {
+            "mode": mode, "class_names": [] if mode == "prompt_free" else prompts,
+            "conf": app.conf_slider.value() / 100.0, "iou": 0.45, "max_det": app.max_det_spin.value(),
+            "imgsz": app.resolution_combo.currentData(), "tiled": app.tile_checkbox.isChecked(),
+            "sliced": app.sahi_checkbox.isChecked(), "slice_size": app.slice_size_combo.currentData(),
+            "slice_overlap": 0.2, "max_slices": 9, "low_light": app.dce_checkbox.isChecked(),
+            "supplement_dark": bool(app.dark_mode_combo.currentData()),
+            "enhancement_strength": app.strength_slider.value() / 100.0,
+        }
+
+    @staticmethod
+    def _run_config(options, identity):
+        return json.dumps(dict(options, **identity), sort_keys=True, ensure_ascii=False)
+
+    def _planned_identity(self, prompts, visual, visual_record):
+        """The identity Start would record when the loaded model is reused as is;
+        None when it would load or switch weights (the identity is not known yet)."""
+        app = self.app
+        try:
+            path = resolve_detection_model(app.model_combo.currentData(), prompt_free=not prompts and not visual)
+        except ValueError:
+            return None
+        device = "cpu" if app.device_combo.currentText() == "CPU" else "cuda:0"
+        engine = app.engine
+        # Modified weights can change under a fixed file name; leave those to the full check.
+        if engine.model is None or app.active_model_path != path or str(engine.device) != device \
+                or path in getattr(app, "_feedback_versions", {}):
+            return None
+        return {"model": path, "model_sha256": app.active_model_sha256, "device": device,
+                "visual_reference": visual_record, "inference_options": engine.inference_options}
 
     def stop_worker(self):
         """Stop after the current image; True once no annotation worker is running."""

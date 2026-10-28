@@ -665,6 +665,48 @@ class AutoAnnotationTabTests(unittest.TestCase):
         panel.worker = worker
         self.assertFalse(window.release_model())
 
+    def test_start_with_nothing_to_detect_keeps_live_detection_and_model(self):
+        window, panel = self.window, self.panel
+        panel.load_folder(self.folder)
+        panel.prompt_input.setText("bottle")
+        window.device_combo.setCurrentText("CPU")
+        engine = window.engine = MagicMock()
+        engine.device, engine.inference_options = "cpu", {}
+        engine.process_frame.side_effect = lambda frame, *args, **kwargs: (
+            frame, [Detection((1., 2., 30., 40.), 0.8, 0, "bottle")], "ok")
+        window.active_model_path, window.active_model_sha256 = "yoloe-26s-seg.pt", "e" * 64
+        with patch.object(window, "_ensure_detection_model", return_value=True), \
+                patch("auto_annotation_ui.weights_sha256", return_value="e" * 64):
+            panel.start()
+            self.assertTrue(panel.worker.wait(10000))
+            for _ in range(50):
+                self.qt_app.processEvents()
+                if panel.worker is None:
+                    break
+        self.assertEqual(panel.session.counts()["detected"], 3)
+        # Same settings and loaded model: nothing to do; live detection and weights are left alone.
+        with patch.object(window, "stop_video_stream") as stop, patch.object(window, "_ensure_detection_model") as ensure:
+            panel.start()
+        stop.assert_not_called()
+        ensure.assert_not_called()
+        self.assertIn("没有需要检测", panel.status_label.text())
+        self.assertEqual(len(panel.session.runs), 1)
+        # A changed setting needs a new run, so Start goes on to stop live detection first.
+        window.conf_slider.setValue(window.conf_slider.value() + 5)
+        with patch.object(window, "stop_video_stream", return_value=False) as stop, \
+                patch.object(window, "_ensure_detection_model") as ensure:
+            panel.start()
+        stop.assert_called_once()
+        ensure.assert_not_called()
+        # Every image reviewed: nothing to do, even though other weights would have to be loaded.
+        for index in range(3):
+            panel.session.reject(index)
+        window.device_combo.setCurrentText("CUDA")
+        with patch.object(window, "stop_video_stream") as stop, patch.object(window, "_ensure_detection_model") as ensure:
+            panel.start()
+        stop.assert_not_called()
+        ensure.assert_not_called()
+
     def test_empty_prompt_never_falls_back_to_preset_text_classes(self):
         self.panel.load_folder(self.folder)
         with patch.object(self.window, "_ensure_detection_model", return_value=True), \
