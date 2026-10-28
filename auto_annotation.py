@@ -9,7 +9,9 @@ import json
 import math
 import os
 import shutil
+import tempfile
 import uuid
+from contextlib import suppress
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +26,8 @@ ANNOTATION_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".bmp"})
 STATES = ("pending", "accepted", "edited", "rejected")
 EXPORTED_STATES = frozenset({"accepted", "edited"})
 MANIFEST_NAME = "auto_annotation_manifest.json"
+SESSION_SCHEMA = "ee6008-auto-annotation-session/1"
+SESSION_CACHE_DIRNAME = "annotation_sessions"
 LABEL_PROVENANCE = "model candidates reviewed by a human"
 GROUND_TRUTH_NOTE = (
     "Labels start from model candidates and were accepted or edited by a human reviewer. "
@@ -380,6 +384,155 @@ class AnnotationSession:
                 if box["label"] not in names:
                     names.append(box["label"])
         return names
+
+    # Session persistence (C2: auto-save / resume) ------------------------
+    def to_dict(self):
+        """Everything needed to resume review: candidates, boxes, states, class order and runs.
+
+        Model identity and run options already live in ``self.runs`` (each
+        entry recorded by ``begin_run``); they are not duplicated here.
+        """
+        entries = []
+        for entry in self.entries:
+            try:
+                stat = entry.path.stat()
+                size, mtime_ns = stat.st_size, stat.st_mtime_ns
+            except OSError:
+                size, mtime_ns = None, None
+            entries.append({
+                "relative": entry.relative, "size": size, "mtime_ns": mtime_ns,
+                "sha256": entry.sha256, "width": entry.width, "height": entry.height,
+                "candidates": deepcopy(entry.candidates), "boxes": deepcopy(entry.boxes),
+                "state": entry.state, "detected": entry.detected, "error": entry.error,
+                "run_index": entry.run_index, "review_method": entry.review_method,
+                "bulk_min_score": entry.bulk_min_score,
+            })
+        return {
+            "schema": SESSION_SCHEMA, "saved_at": now_iso(), "folder": str(self.folder),
+            "recursive": self.recursive, "created_at": self.created_at,
+            "classes": list(self.classes), "runs": deepcopy(self.runs), "entries": entries,
+        }
+
+    @classmethod
+    def from_dict(cls, data, folder, recursive=False):
+        """Rebuild from a saved session, restoring only images that have not changed.
+
+        A fresh scan decides which images exist now; a saved record is only
+        applied when the file's size and mtime still match what was recorded,
+        so an image that changed on disk is never resumed with stale candidates
+        (it is left at "undetected / pending", like a brand-new scan would see
+        it). A malformed per-image record is treated the same way, rather than
+        guessing at its content. ``restored_count`` / ``changed_count`` on the
+        returned session report what happened, for the caller to display.
+        """
+        if not isinstance(data, dict) or data.get("schema") != SESSION_SCHEMA:
+            raise ValueError(message("标注进度文件版本不兼容或已损坏"))
+        if not {"entries", "runs", "classes"}.issubset(data):
+            raise ValueError(message("标注进度文件缺少必要字段"))
+        session = cls(folder, recursive=recursive)
+        if isinstance(data.get("created_at"), str) and data["created_at"]:
+            session.created_at = data["created_at"]
+        session.set_classes(data.get("classes") or [])
+        session.runs = [dict(run) for run in data.get("runs") or [] if isinstance(run, dict)]
+        saved = {raw.get("relative"): raw for raw in data.get("entries") or []
+                if isinstance(raw, dict) and isinstance(raw.get("relative"), str)}
+        restored = changed = 0
+        for entry in session.entries:
+            raw = saved.get(entry.relative)
+            if raw is None:
+                continue
+            try:
+                stat = entry.path.stat()
+            except OSError:
+                continue
+            if raw.get("size") != stat.st_size or raw.get("mtime_ns") != stat.st_mtime_ns:
+                changed += 1
+                continue
+            try:
+                width, height = raw.get("width"), raw.get("height")
+                candidates = [normalize_box(box) for box in raw.get("candidates") or []]
+                boxes = [normalize_box(box) for box in raw.get("boxes") or []]
+                state = raw.get("state") if raw.get("state") in STATES else "pending"
+                run_index = raw.get("run_index")
+                run_index = run_index if isinstance(run_index, int) and 0 <= run_index < len(session.runs) else None
+                bulk_min_score = raw.get("bulk_min_score")
+                bulk_min_score = float(bulk_min_score) if isinstance(bulk_min_score, (int, float)) else None
+            except (TypeError, ValueError, KeyError):
+                changed += 1
+                continue
+            entry.width = int(width) if isinstance(width, (int, float)) else None
+            entry.height = int(height) if isinstance(height, (int, float)) else None
+            entry.sha256 = str(raw.get("sha256") or "")
+            entry.candidates, entry.boxes = candidates, boxes
+            entry.state, entry.detected = state, bool(raw.get("detected"))
+            entry.error = raw.get("error") if isinstance(raw.get("error"), str) else None
+            entry.run_index, entry.review_method = run_index, str(raw.get("review_method") or "")
+            entry.bulk_min_score = bulk_min_score
+            restored += 1
+        session.dirty = any(entry.state != "pending" for entry in session.entries)
+        session.restored_count, session.changed_count = restored, changed
+        return session
+
+
+def session_cache_dir():
+    """Where saved review sessions live; ``EE6008_ANNOTATION_CACHE_DIR`` redirects it (tests, shared drives)."""
+    override = os.environ.get("EE6008_ANNOTATION_CACHE_DIR")
+    directory = Path(override) if override else PROJECT / ".cache" / SESSION_CACHE_DIRNAME
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def session_cache_path(folder):
+    """A stable, collision-resistant cache path for one source folder.
+
+    Kept outside the image folder itself (never written next to the user's
+    photos) and under the project's git-ignored ``.cache/``, consistent with
+    the GPU lock file; never committed.
+    """
+    key = hashlib.sha256(str(Path(os.path.abspath(folder))).encode("utf-8")).hexdigest()
+    return session_cache_dir() / (key + ".json")
+
+
+def write_session(session, path=None):
+    """Atomically write *session* as JSON: a temp file, fsync, then one rename."""
+    path = Path(path) if path is not None else session_cache_path(session.folder)
+    data = session.to_dict()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2, allow_nan=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        with suppress(OSError):
+            os.unlink(tmp_name)
+        raise
+    return path
+
+
+def read_session_file(path):
+    """The saved session dict, or None when there is nothing saved yet."""
+    path = Path(path)
+    if not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(message("标注进度文件损坏，无法读取：{error}", error=str(exc))) from exc
+    try:
+        return json.loads(text)
+    except ValueError as exc:
+        raise ValueError(message("标注进度文件损坏，无法读取：{error}", error=str(exc))) from exc
+
+
+def delete_session_file(folder, path=None):
+    """Remove the saved session for *folder*, if any; never raises."""
+    path = Path(path) if path is not None else session_cache_path(folder)
+    with suppress(OSError):
+        path.unlink()
 
 
 def _plan(session, target, min_score):
