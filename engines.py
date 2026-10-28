@@ -34,11 +34,16 @@ class OpenVocabEngine:
         self._inference_options = {
             "agnostic_nms": True, "head_mode": "one2many", "quantize": 32,
         }
+        # Set by load_model: which graph serves the checkpoint ("seg" or "det").
+        self.model_graph = None
 
     @property
     def inference_options(self):
         """A copy of the active options, suitable for an experiment manifest."""
-        return dict(self._inference_options)
+        options = dict(self._inference_options)
+        if self.model_graph:
+            options["graph"] = self.model_graph["graph"]
+        return options
 
     def set_inference_options(self, *, agnostic_nms=None, head_mode=None, quantize=None):
         """Configure a sequential experiment before inference starts.
@@ -53,7 +58,7 @@ class OpenVocabEngine:
         in the inference worker while it is idle, never concurrently
         with detect(). Existing text/visual prompt embeddings are preserved.
         """
-        candidate = self.inference_options
+        candidate = dict(self._inference_options)
         if agnostic_nms is not None:
             if not isinstance(agnostic_nms, bool):
                 raise ValueError("agnostic_nms 必须是 True 或 False")
@@ -113,14 +118,24 @@ class OpenVocabEngine:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-    def load_model(self, model_path, device="CPU"):
+    def load_model(self, model_path, device="CPU", graph="seg"):
+        """Load one checkpoint; ``graph="det"`` serves a ``-seg`` checkpoint
+        through its detection branch only (exact tensor copy, no mask branch;
+        see detection_branch.py). If that conversion is not exact, the full
+        segmentation model stays loaded and ``model_graph["fallback"]`` says
+        why; nothing is retried. The conversion runs on the CPU before the
+        model moves to ``device``.
+        """
         try:
+            if graph not in ("seg", "det"):
+                raise ValueError("计算图必须是 seg（完整分割模型）或 det（仅检测分支）")
             if self.model is not None:
                 self.unload()
             target_device = prepare_device(device)
             config_dir = Path(__file__).resolve().parent / ".ultralytics"
             config_dir.mkdir(exist_ok=True)
             os.environ.setdefault("YOLO_CONFIG_DIR", str(config_dir))
+            import time
             import torch
             from ultralytics import YOLOE
             from ultralytics.cfg import DEFAULT_CFG_DICT
@@ -129,8 +144,23 @@ class OpenVocabEngine:
             if not path.is_absolute():
                 path = Path(__file__).resolve().parent / path
             new_model = YOLOE(str(path))
+            record = {"requested": graph, "graph": "seg"}
+            if graph == "det":
+                from detection_branch import convert_to_detection_branch
+                started = time.perf_counter()
+                try:
+                    new_model, record["transfer"] = convert_to_detection_branch(new_model)
+                    record["graph"] = "det"
+                except MemoryError:
+                    raise
+                except Exception as exc:
+                    # Visible fallback: keep the verified full model and report why.
+                    record["fallback"] = exception_message(exc)
+                record["conversion_s"] = round(time.perf_counter() - started, 3)
+                import gc
+                gc.collect()
             new_model.to(target_device)
-            self.model, self.device = new_model, target_device
+            self.model, self.device, self.model_graph = new_model, target_device, record
             self._prediction_head_options = (
                 {"nms": None} if DEFAULT_CFG_DICT.get("nms", False) is None else {"end2end": False}
             )
@@ -152,6 +182,7 @@ class OpenVocabEngine:
         """Release weights before loading another checkpoint, without retrying."""
         import gc
         self.model = None
+        self.model_graph = None
         if hasattr(self, "processor"):
             self.processor = None
         self.current_classes = []

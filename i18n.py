@@ -494,6 +494,22 @@ EN = {
     "{name}（未下载）": "{name} (not downloaded)",
     "{name} 未下载（{reason}），没有加载或替换任何模型。请运行 python tools/fetch_models.py --models {name}，完成后再点击“应用设置 / 加载模型”。": "{name} is not downloaded ({reason}). No model was loaded or replaced. Run python tools/fetch_models.py --models {name}, then click Apply settings / Load model.",
     "模型未下载": "Model not downloaded",
+    "仅加载检测分支（不生成掩膜，预测相同）": "Load the detection branch only (no masks, same predictions)",
+    "本程序只画框、不画掩膜。勾选时把分割权重逐张量原样复制到同规格的检测结构，去掉掩膜分支；核对不通过时保留完整分割模型并在状态栏说明。取消勾选则加载完整分割模型。无提示模型始终加载完整模型；下次加载模型时生效。": "The app draws boxes, never masks. When checked, the segmentation weights are copied tensor by tensor into the matching detection architecture without the mask branch; if that check fails, the full segmentation model stays loaded and the status bar says why. Uncheck to load the full segmentation model. Prompt-free models always load in full. Applies the next time a model loads.",
+    "\n计算图：仅检测分支（{copied} 个张量与原权重逐一相同，去掉 {removed} 个掩膜分支张量）": "\nGraph: detection branch only ({copied} tensors identical to the checkpoint; {removed} mask-branch tensors removed)",
+    "\n计算图：完整分割模型（仅检测分支未通过核对：{error}）": "\nGraph: full segmentation model (the detection-branch check failed: {error})",
+    "\n计算图：完整分割模型（设置为不转换）": "\nGraph: full segmentation model (conversion turned off in settings)",
+    "计算图必须是 seg（完整分割模型）或 det（仅检测分支）": "The graph must be seg (full segmentation model) or det (detection branch only).",
+    "权重没有可识别的分割结构配置（{name}）": "The checkpoint has no recognizable segmentation model configuration ({name}).",
+    "无提示 LRPC 检测头不做仅检测分支转换": "Prompt-free LRPC heads are not converted to the detection branch.",
+    "检测分支有 {count} 个张量与原权重不一致，例如 {key}": "{count} detection-branch tensors differ from the checkpoint, e.g. {key}.",
+    "去掉的张量不只是掩膜分支，例如 {key}": "The removed tensors are not only the mask branch, e.g. {key}.",
+    "（没有掩膜分支）": "(no mask branch)",
+    "检测结构的文字编码器与原权重不同": "The detection architecture uses a different text encoder from the checkpoint.",
+    "检测结构的步长与原权重不同": "The detection architecture has different strides from the checkpoint.",
+    "检测头设置 {name} 与原权重不同": "Detection-head setting {name} differs from the checkpoint.",
+    "仅检测分支转换只适用于分割权重（当前任务：{task}）": "Detection-branch conversion applies only to segmentation checkpoints (current task: {task}).",
+    "匹配 YAML 没有构建检测架构（{name}）": "The matching YAML did not build a detection architecture ({name}).",
 }
 
 

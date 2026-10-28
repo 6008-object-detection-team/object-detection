@@ -274,6 +274,7 @@ class AIApp(QMainWindow):
                 self.detection_error("模型未下载", detail)
                 return False
         device = self.device_combo.currentText()
+        graph = "det" if self.detection_branch_checkbox.isChecked() else "seg"
         engine = (PromptFreeEngine() if model_path in PROMPTED_PAIRS else
                   GroundingDINOEngine() if model_path.startswith("IDEA-Research/") else OpenVocabEngine())
         self.show_status(message("正在加载模型：{path}（先释放旧模型，不改变运行设备）…", path=model_path))
@@ -288,7 +289,9 @@ class AIApp(QMainWindow):
             import torch
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            status = engine.load_model(model_path, device)
+            # Only text/visual YOLOE checkpoints have a detection-branch-only graph.
+            status = (engine.load_model(model_path, device, graph=graph) if type(engine) is OpenVocabEngine
+                      else engine.load_model(model_path, device))
         except Exception as exc:
             status = message("模型加载失败：{kind}: {error}", kind=type(exc).__name__, error=exception_message(exc))
         finally:
@@ -305,7 +308,8 @@ class AIApp(QMainWindow):
                 self.model_combo.setCurrentIndex(index)
                 self.model_combo.blockSignals(False)
             self._update_model_indicator()
-            detail = message("\nDINO 文本阈值固定为 0.25，请使用英文目标提示词。") if isinstance(engine, GroundingDINOEngine) else ""
+            detail = (message("\nDINO 文本阈值固定为 0.25，请使用英文目标提示词。") if isinstance(engine, GroundingDINOEngine)
+                      else self._graph_detail(engine))
             self.show_status(message(
                 "模型已加载：{path}\n推理尺寸：{size}{detail}\n速度和精度以本机测试结果为准。",
                 path=model_path, size=self.engine.imgsz, detail=detail))
@@ -317,6 +321,27 @@ class AIApp(QMainWindow):
             self.detection_error("模型加载失败", status, critical=True)
         self._update_model_indicator()
         return False
+
+    @staticmethod
+    def _graph_detail(engine):
+        """Which graph serves a text/visual checkpoint; empty for other engines."""
+        record = getattr(engine, "model_graph", None) or {}
+        if type(engine) is not OpenVocabEngine or not record:
+            return ""
+        if record.get("graph") == "det":
+            transfer = record.get("transfer", {})
+            return message("\n计算图：仅检测分支（{copied} 个张量与原权重逐一相同，去掉 {removed} 个掩膜分支张量）",
+                           copied=transfer.get("tensors_copied_exactly", "?"),
+                           removed=transfer.get("mask_branch_tensors_removed", "?"))
+        if record.get("fallback"):
+            return message("\n计算图：完整分割模型（仅检测分支未通过核对：{error}）", error=record["fallback"])
+        return message("\n计算图：完整分割模型（设置为不转换）")
+
+    def _wanted_graph(self, path):
+        """The graph setting for a text/visual YOLOE checkpoint; None for PF/DINO."""
+        if path in PROMPTED_PAIRS or str(path).startswith("IDEA-Research/"):
+            return None
+        return "det" if self.detection_branch_checkbox.isChecked() else "seg"
 
     def _update_model_indicator(self):
         if not self.active_model_path or self.engine.model is None:
@@ -352,8 +377,11 @@ class AIApp(QMainWindow):
                 self.show_status(message("修改版当前不可用；不会替换成原版，请检查训练日志。"))
                 return False
         expected_sha = self._feedback_versions.get(path, {}).get("checkpoint_sha256", "")
+        wanted_graph = self._wanted_graph(path)
+        loaded_graph = (getattr(self.engine, "model_graph", None) or {}).get("requested", wanted_graph)
         if self.engine.model is None or self.active_model_path != path or self.engine.device != target_device \
-                or (expected_sha and expected_sha != self.active_model_sha256):
+                or (expected_sha and expected_sha != self.active_model_sha256) \
+                or (wanted_graph is not None and loaded_graph != wanted_graph):
             if not self._load_model_path(path):
                 return False
         self.engine.imgsz = self.resolution_combo.currentData()
