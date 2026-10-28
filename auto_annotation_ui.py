@@ -528,12 +528,13 @@ class AutoAnnotationPanel(QWidget):
         return resumed
 
     def _autosave(self):
-        """Persist the review session after each human decision; never blocks review."""
+        """Persist the review session after each human decision and each detection run; never blocks review."""
         if self.session is None:
             return
         try:
             write_session(self.session)
-        except OSError as exc:
+        except (OSError, ValueError, TypeError) as exc:
+            # ValueError / TypeError: a value JSON cannot store (NaN score, odd run option).
             self.notify(message("标注进度未能保存：{error}", error=exception_message(exc)))
 
     def load_folder(self, folder):
@@ -786,6 +787,8 @@ class AutoAnnotationPanel(QWidget):
         self.run_index = None
         self.update_summary()
         self.update_controls()
+        # Candidates from a long batch survive a crash before the first review decision.
+        self._autosave()
         worker.deleteLater()
 
     # Review --------------------------------------------------------------

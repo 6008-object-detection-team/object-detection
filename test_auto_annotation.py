@@ -1125,6 +1125,31 @@ class AutoAnnotationTabTests(unittest.TestCase):
                 self.assertEqual(panel.session.classes, expected)
                 panel._autosave()
 
+    def test_detection_run_end_autosaves_candidates_before_any_review(self):
+        panel = self.panel
+        panel.load_folder(self.folder)
+        path = session_cache_path(self.folder)
+        self.assertFalse(path.is_file())
+        panel.run_index = panel.session.begin_run({"config": "{}"})
+        self.simulate_detection(0)
+        worker = panel.worker = MagicMock(skipped=[], processed=1, failed=None, running=True, model_sha256="a" * 64)
+        panel.on_finished(worker)
+        saved = read_session_file(path)
+        self.assertTrue(saved["entries"][0]["detected"])
+        self.assertEqual(len(saved["entries"][0]["candidates"]), 2)
+        self.assertIsNotNone(saved["runs"][0]["finished_at"])
+
+    def test_unserialisable_session_value_is_reported_not_raised(self):
+        panel = self.panel
+        panel.load_folder(self.folder)
+        self.simulate_detection(0, [{"label": "cup", "xyxy": [1., 1., 9., 9.], "score": float("nan"), "source": "original"}])
+        panel.accept_current()  # write_session(allow_nan=False) raises ValueError inside the review slot
+        self.assertEqual(panel.session.entries[0].state, "accepted")
+        self.assertIn("标注进度未能保存", panel.status_label.text())
+        panel.session.runs.append({"config": "{}", "odd": object()})  # TypeError from json.dump
+        panel._autosave()
+        self.assertIn("标注进度未能保存", panel.status_label.text())
+
     def test_declining_resume_keeps_a_fresh_session(self):
         panel = self.panel
         panel.load_folder(self.folder)
