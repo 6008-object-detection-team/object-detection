@@ -27,6 +27,20 @@ from video_worker import IMAGE_SUFFIXES, VideoWorker, read_image_file
 from live_video import DisplayMetrics
 from i18n import message, exception_message
 from ui_language import UiLanguage, QFileDialog, QMessageBox
+from tools.fetch_models import weight_state
+
+PROJECT = Path(__file__).resolve().parent
+WEIGHT_PROBLEMS = {"missing": "文件不存在", "lfs_pointer": "只有 Git LFS 指针文件，权重未下载",
+                   "incomplete": "文件不足 1 MiB，可能未下载完整"}
+
+
+def local_weight_problem(model_path):
+    """None when a local checkpoint looks downloaded; otherwise the reason."""
+    if str(model_path).startswith("IDEA-Research/"):
+        return None
+    path = Path(model_path)
+    state = weight_state(path if path.is_absolute() else PROJECT / path)
+    return None if state == "ok" else message(WEIGHT_PROBLEMS[state])
 
 
 class AIApp(QMainWindow):
@@ -62,6 +76,7 @@ class AIApp(QMainWindow):
         self.ui_language = UiLanguage(self)
         build_ui(self)
         self.ui_language.capture(self)
+        self._mark_missing_models()
         self._update_model_indicator()
         self.ui_language.changed.connect(self._retranslate_dynamic_content)
         import torch
@@ -80,6 +95,21 @@ class AIApp(QMainWindow):
 
     def show_status(self, value):
         self.ui_language.bind(self.statusBar(), value, "status")
+
+    @staticmethod
+    def _model_title(title, path):
+        """Base-model titles get a translated "(not downloaded)" suffix."""
+        return message("{name}（未下载）", name=message(title)) if local_weight_problem(path) else title
+
+    def _mark_missing_models(self):
+        """Re-check the listed base weights; entries stay selectable and explain themselves."""
+        titles = {path: title for title, path in type(self).MODELS.items()}
+        for index in range(self.model_combo.count()):
+            path = self.model_combo.itemData(index)
+            if path in titles:
+                self.ui_language.bind(self.model_combo, self._model_title(titles[path], path), "itemText", index)
+        self.MODELS = {self.model_combo.itemText(index): self.model_combo.itemData(index)
+                       for index in range(self.model_combo.count())}
 
     def detection_error(self, title, detail, *, critical=False):
         if self._feedback_retest is not None:
@@ -231,6 +261,17 @@ class AIApp(QMainWindow):
                 return False
             if sha256_file(model_path) != self._feedback_versions[model_path]["checkpoint_sha256"]:
                 self.detection_error("版本校验失败", "修改版权重校验失败，不加载；请检查日志或重新更新修改版。")
+                return False
+        if model_path not in self._feedback_versions and model_path not in PROMPTED_PAIRS:
+            # Prompt-free weights are checked against model_sources.json by their engine.
+            problem = local_weight_problem(model_path)
+            if problem is not None:
+                self._mark_missing_models()
+                name = Path(model_path).name
+                detail = message("{name} 未下载（{reason}），没有加载或替换任何模型。请运行 python tools/fetch_models.py --models {name}，完成后再点击“应用设置 / 加载模型”。",
+                                 name=name, reason=problem)
+                self.show_status(detail)
+                self.detection_error("模型未下载", detail)
                 return False
         device = self.device_combo.currentText()
         engine = (PromptFreeEngine() if model_path in PROMPTED_PAIRS else
@@ -553,7 +594,7 @@ class AIApp(QMainWindow):
         store = self.feedback_panel.store if hasattr(self, "feedback_panel") else FeedbackStore()
         versions = store.model_versions()
         self._feedback_versions = {path: row for _, path, row in versions}
-        entries = list(type(self).MODELS.items())
+        entries = [(self._model_title(title, path), path) for title, path in type(self).MODELS.items()]
         for title, path, row in versions:
             family = row.get("model_family") or model_family(row.get("parent", ""))
             if family:

@@ -7,6 +7,29 @@ from pathlib import Path
 import urllib.request
 
 
+LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/"
+MIN_WEIGHT_BYTES = 1024 * 1024
+
+
+def weight_state(path):
+    """'ok', 'missing', 'lfs_pointer' or 'incomplete' for a local weight file.
+
+    Only the size and, for files under 1 MiB, the first bytes are read: a Git
+    LFS checkout without ``git lfs pull`` leaves ~133-byte text pointers.
+    """
+    path = Path(path)
+    try:
+        if not path.is_file():
+            return "missing"
+        if path.stat().st_size >= MIN_WEIGHT_BYTES:
+            return "ok"
+        with path.open("rb") as stream:
+            head = stream.read(len(LFS_POINTER_PREFIX))
+    except OSError:
+        return "missing"
+    return "lfs_pointer" if head == LFS_POINTER_PREFIX else "incomplete"
+
+
 def sha256(path):
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:

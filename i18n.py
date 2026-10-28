@@ -488,6 +488,12 @@ EN = {
     "驱动默认（1 缓冲，原有设置）": "Driver default (1 buffer, original setting)",
     "MJPG（4 缓冲，需摄像头支持）": "MJPG (4 buffers, camera must support it)",
     "仅对摄像头输入有效，下次开始检测时生效。MJPG 在本机 720p 摄像头上把输入从约 10 FPS 提高到约 30 FPS；摄像头不支持时按默认设置运行。状态栏显示驱动实际协商的格式、分辨率、帧率和缓冲数。": "Camera input only; applies the next time detection starts. On the tested 720p webcam MJPG raised the input from about 10 to about 30 FPS. If the camera refuses MJPG, the default settings apply. The status bar shows the format, resolution, frame rate and buffers the driver actually negotiated.",
+    "文件不存在": "the file does not exist",
+    "只有 Git LFS 指针文件，权重未下载": "only a Git LFS pointer file; the weights were not downloaded",
+    "文件不足 1 MiB，可能未下载完整": "the file is under 1 MiB and may be incomplete",
+    "{name}（未下载）": "{name} (not downloaded)",
+    "{name} 未下载（{reason}），没有加载或替换任何模型。请运行 python tools/fetch_models.py --models {name}，完成后再点击“应用设置 / 加载模型”。": "{name} is not downloaded ({reason}). No model was loaded or replaced. Run python tools/fetch_models.py --models {name}, then click Apply settings / Load model.",
+    "模型未下载": "Model not downloaded",
 }
 
 
