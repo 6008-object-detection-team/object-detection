@@ -285,6 +285,19 @@ class ExportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             export_yolo(empty, self.root / "out" / "empty")
 
+    def test_yolo_refuses_label_name_clashes_but_coco_keeps_both(self):
+        write_image(self.folder / "img0.jpg", value=7)
+        session = AnnotationSession(self.folder)
+        for index, entry in enumerate(session.entries):
+            image, sha = read_image_with_sha(entry.path)
+            session.set_candidates(index, candidates(), image.shape[1], image.shape[0], sha)
+            session.accept(index)
+        with self.assertRaises(ValueError):
+            export_yolo(session, self.root / "out" / "yolo")
+        self.assertFalse((self.root / "out" / "yolo").exists())
+        coco = json.loads((export_coco(session, self.root / "out" / "coco")["path"] / "annotations.json").read_text())
+        self.assertIn("img0.jpg", [row["file_name"] for row in coco["images"]])
+
     def test_failed_export_leaves_no_partial_directory(self):
         out = self.root / "out"
         with patch("auto_annotation._copy_image", side_effect=OSError("disk full")):

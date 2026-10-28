@@ -454,6 +454,13 @@ def _copy_image(entry, root):
 def export_yolo(session, target, min_score=0.0):
     """images/ copies + labels/*.txt, classes.txt, images.txt and data.yaml."""
     target, plan = _plan(session, target, min_score)
+    labels = {}
+    for entry, _ in plan:
+        # a.jpg and a.png would both need labels/a.txt (also for Ultralytics).
+        key = str(Path(entry.relative).with_suffix(".txt")).casefold()
+        if key in labels:
+            raise ValueError(message("YOLO 标签文件名冲突：{first} 与 {second} 会写入同一个 .txt", first=labels[key], second=entry.relative))
+        labels[key] = entry.relative
     classes = session.export_classes(plan)
     ids = {name: index for index, name in enumerate(classes)}
     staging = _staging_dir(target)

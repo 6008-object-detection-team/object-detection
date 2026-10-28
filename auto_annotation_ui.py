@@ -637,8 +637,12 @@ class AutoAnnotationPanel(QWidget):
             return
         self.relabel()
         index = self.current
-        self.session.update_boxes(index, self.canvas.boxes)
-        self.session.accept(index)
+        try:
+            self.session.update_boxes(index, self.canvas.boxes)
+            self.session.accept(index)
+        except ValueError as exc:
+            self.notify(exception_message(exc))
+            return
         self._after_review(index)
 
     def reject_current(self):
