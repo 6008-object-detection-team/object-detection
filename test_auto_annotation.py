@@ -1106,6 +1106,25 @@ class AutoAnnotationTabTests(unittest.TestCase):
         self.assertEqual(panel.session.restored_count, 3)  # all 3 images' fingerprints still match
         self.assertEqual(panel.session.changed_count, 0)
 
+    def test_resume_keeps_the_saved_class_order_and_refills_the_class_box(self):
+        panel = self.panel
+        panel.load_folder(self.folder)
+        panel.class_input.setText("cup, bottle")
+        panel.apply_class_order()
+        self.simulate_detection(0)
+        panel.accept_current()
+        for typed, expected in (("", ["cup", "bottle"]), ("person, bottle", ["cup", "bottle", "person"])):
+            with self.subTest(typed=typed):
+                panel.class_input.setText(typed)  # e.g. empty after a restart
+                panel.session = None
+                with patch("auto_annotation_ui.QMessageBox.question", return_value=QtMessageBox.Yes):
+                    self.assertTrue(panel.load_folder(self.folder))
+                self.assertEqual(panel.session.classes, expected)
+                self.assertEqual(panel.class_input.text(), ", ".join(expected))
+                panel.apply_class_order()  # what export runs first
+                self.assertEqual(panel.session.classes, expected)
+                panel._autosave()
+
     def test_declining_resume_keeps_a_fresh_session(self):
         panel = self.panel
         panel.load_folder(self.folder)

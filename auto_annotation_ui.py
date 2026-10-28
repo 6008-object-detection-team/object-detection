@@ -547,9 +547,17 @@ class AutoAnnotationPanel(QWidget):
         if not len(session):
             self.notify(message("所选文件夹中没有 JPG、JPEG、PNG 或 BMP 图片。"))
             return False
+        fresh = session
         session = self._maybe_resume(session, folder)
         self.session, self.current = session, -1
-        session.set_classes(parse_prompts(self.class_input.text()))
+        typed = parse_prompts(self.class_input.text())
+        if session is not fresh and session.classes:
+            # Keep the saved class order so YOLO class ids match earlier exports of this
+            # folder; classes typed in the box that the session lacks go after them.
+            session.set_classes(session.classes + typed)
+            self.class_input.setText(", ".join(session.classes))
+        else:
+            session.set_classes(typed)
         self._bind(self.folder_label, message("{folder}（{count} 张图片）", folder=str(session.folder), count=len(session)))
         self.canvas.clear()
         self.box_list.clear()
