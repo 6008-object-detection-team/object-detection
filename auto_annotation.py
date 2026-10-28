@@ -245,18 +245,27 @@ class AnnotationSession:
         entry.width, entry.height, entry.sha256 = int(width), int(height), sha256 or entry.sha256
 
     def set_candidates(self, index, boxes, width, height, sha256, run_index=None):
+        """Store a detection result; True if it was applied.
+
+        A result for an image the person reviewed or changed after the job was
+        queued is discarded: their boxes, the candidates they saw and the run
+        those came from stay as they are (counted in the run record).
+        """
         entry = self.entries[index]
         if len(boxes) > MAX_BOXES:
             raise ValueError("单张图最多保存 1000 个框")
-        untouched = entry.state == "pending" and not entry.modified
         self.set_image_info(index, width, height, sha256)
-        entry.candidates = [normalize_box(box, width, height) for box in boxes]
+        candidates = [normalize_box(box, width, height) for box in boxes]
+        run = None if run_index is None else self.runs[run_index]
+        if run is not None and run.get("finished_at") is None:
+            run["processed"] = run.get("processed", 0) + 1
+        if entry.state != "pending" or entry.modified:
+            if run is not None:
+                run["results_discarded_after_review"] = run.get("results_discarded_after_review", 0) + 1
+            return False
+        entry.candidates, entry.boxes = candidates, deepcopy(candidates)
         entry.detected, entry.error, entry.run_index = True, None, run_index
-        if run_index is not None:
-            self.runs[run_index]["processed"] = self.runs[run_index].get("processed", 0) + 1
-        if untouched:
-            entry.boxes = deepcopy(entry.candidates)
-        return untouched
+        return True
 
     def set_error(self, index, error):
         self.entries[index].error = str(error)

@@ -121,17 +121,46 @@ class SessionStateTests(unittest.TestCase):
         self.assertEqual(entry.state, "edited")
         session.update_boxes(0, candidates())
         self.assertEqual(entry.state, "accepted")
-        # Re-detection replaces candidates but never human-reviewed or changed boxes.
+        # A late result never touches a reviewed image: boxes and the candidates the person saw stay.
         new = [{"label": "cell phone", "xyxy": [1, 1, 9, 9], "score": 0.8}]
         self.assertFalse(session.set_candidates(0, new, 100, 80, sha))
         self.assertEqual([box["label"] for box in entry.boxes], ["bottle", "cup"])
-        self.assertEqual([box["label"] for box in entry.candidates], ["cell phone"])
+        self.assertEqual([box["label"] for box in entry.candidates], ["bottle", "cup"])
         session.reset(1)
         self.assertEqual((session.entries[1].state, session.entries[1].boxes), ("pending", session.entries[1].candidates))
         with self.assertRaises(ValueError):
             session.set_image_info(1, 100, 80, "0" * 64)
         counts = session.counts()
         self.assertEqual((counts["accepted"], counts["pending"], counts["exportable"], counts["detected"]), (1, 2, 1, 3))
+
+    def test_result_for_an_image_reviewed_while_queued_is_discarded(self):
+        for index in range(3):
+            write_image(self.folder / f"img{index}.png", value=index * 30)
+        session = AnnotationSession(self.folder)
+        shas = [read_image_with_sha(entry.path)[1] for entry in session.entries]
+        first = session.begin_run({"config": "A"})
+        session.set_candidates(2, [candidates()[0]], 100, 80, shas[2], first)
+        run = session.begin_run({"config": "B"})
+        # While run B is queued: image 0 is opened and accepted as empty, image 2 is edited.
+        session.set_image_info(0, 100, 80, shas[0])
+        session.update_boxes(0, [])
+        self.assertEqual(session.accept(0), "accepted")
+        session.update_boxes(2, [{"label": "cup", "xyxy": [50., 10., 99., 70.]}])
+        for index in range(3):
+            session.set_candidates(index, candidates(), 100, 80, shas[index], run)
+        accepted, untouched, edited = session.entries
+        self.assertEqual((accepted.state, accepted.boxes, accepted.candidates, accepted.run_index, accepted.detected),
+                         ("accepted", [], [], None, False))
+        self.assertFalse(accepted.modified)
+        self.assertEqual((untouched.run_index, untouched.boxes), (run, untouched.candidates))
+        self.assertEqual((edited.run_index, [box["label"] for box in edited.candidates]), (first, ["bottle"]))
+        self.assertEqual([box_origin(box, edited.candidates) for box in edited.boxes], ["human"])
+        self.assertEqual((session.runs[run]["processed"], session.runs[run]["results_discarded_after_review"]), (3, 2))
+        # A result delivered after the run was finalised does not change its processed count.
+        session.finish_run(run, processed=3)
+        session.reset(2)
+        session.set_candidates(2, candidates(), 100, 80, shas[2], run)
+        self.assertEqual((session.runs[run]["processed"], edited.run_index), (3, run))
 
     def test_targets_follow_configuration_and_skip_reviewed_or_changed_images(self):
         session = detected_session(self.folder, 4)
