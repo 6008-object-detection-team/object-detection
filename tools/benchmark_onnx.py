@@ -250,6 +250,20 @@ def source_hashes():
         "resource_safety.py", "evaluate_mini_dataset.py", "detection_utils.py")}
 
 
+def git_state():
+    """Commit and whether tracked files differ from it, as the other experiment tools record.
+    Tracked __pycache__ bytecode is ignored: running Python rewrites it."""
+    def git(*arguments):
+        return subprocess.run(["git", *arguments], cwd=PROJECT, capture_output=True, text=True,
+                              timeout=20, check=True).stdout.strip()
+    try:
+        return {"commit": git("rev-parse", "HEAD"),
+                "tracked_changes": bool(git("status", "--porcelain", "--untracked-files=no", "--", ".",
+                                            ":(exclude)*.pyc"))}
+    except (OSError, subprocess.SubprocessError):
+        return {"commit": None, "tracked_changes": None}
+
+
 def model_files(args, manifests):
     from tools.export_onnx import TEXT_ENCODER, file_record
     model = project_path(args.model)
@@ -580,7 +594,7 @@ def main(argv=None):
               "notice": NOTICE, "image_count": len(dataset["images"]), "classes": list(dataset["classes"]),
               "image_ids": [int(item["id"]) for item in dataset["images"]],
               "dataset_sha256": dataset["sha256"], "dataset_files": dataset["file_hashes"],
-              "model_files": model_files(args, manifests), "source_hashes": source_hashes(),
+              "model_files": model_files(args, manifests), "source_hashes": source_hashes(), "git": git_state(),
               "versions": {**versions(), **{name: _version(name) for name in ("onnx", "onnxslim", "onnxruntime")}},
               "onnxruntime_available_providers": _providers(), "host": host_info(), "runs": []}
     write_summary(output, report)

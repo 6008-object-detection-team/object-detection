@@ -297,6 +297,15 @@ class BenchmarkArgumentTests(unittest.TestCase):
         plan = json.loads(printed.getvalue())
         self.assertEqual(plan["order"][1], ["pt_cpu_square", "pt_cpu_rect"])
 
+    def test_report_records_git_commit_and_tracked_changes(self):
+        state = bench.git_state()
+        self.assertEqual(set(state), {"commit", "tracked_changes"})
+        if state["commit"] is not None:
+            self.assertRegex(state["commit"], r"^[0-9a-f]{40}$")
+            self.assertIsInstance(state["tracked_changes"], bool)
+        with patch("tools.benchmark_onnx.subprocess.run", side_effect=OSError("no git")):
+            self.assertEqual(bench.git_state(), {"commit": None, "tracked_changes": None})
+
 
 class AgreementTests(unittest.TestCase):
     @staticmethod
