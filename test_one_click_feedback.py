@@ -198,7 +198,7 @@ class OneClickUiTests(unittest.TestCase):
 
     def test_english_translates_new_workflow_and_demo_progress(self):
         self.app.language_combo.setCurrentIndex(self.app.language_combo.findData("en"))
-        self.assertEqual(self.panel.quick_button.text(), "Update model & retest this image")
+        self.assertEqual(self.panel.quick_button.text(), "Update model and retest this image")
         self.assertIn("Advanced samples", self.panel.advanced.text())
         process = self.panel.process = MagicMock()
         process.readAllStandardOutput.return_value = json.dumps({"epoch": 1, "train_loss": .3, "val_loss": None,
