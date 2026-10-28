@@ -480,6 +480,61 @@ EN = {
     "冻结的骨干/文字/视觉/分割模块发生变化，拒绝注册": "Registration refused: a frozen backbone/text/visual/segmentation module changed.",
     "已保存版本没有有效检测头更新或改变了冻结模块，拒绝注册": "Registration refused: no valid detection-head update, or a frozen module changed.",
     "父模型被外部修改；拒绝注册": "Registration refused: the parent model was changed externally.",
+    # --- imp/review-tools ---
+    # C1: Tab 3 / Tab 4 review shortcuts.
+    "删除左侧列表中选中的框。快捷键 Delete。": "Deletes the box currently selected in the list on the left. Shortcut: Delete.",
+    "采用当前全部框（含未修改的候选）；有改动时记为“已修改”。随后跳到下一张待审图片。快捷键 A。": "Accepts all current boxes (including unchanged candidates); marked Edited if anything changed, then moves on to the next pending image. Shortcut: A.",
+    "本图不导出，随后跳到下一张待审图片。快捷键 R。": "This image is not exported; moves on to the next pending image. Shortcut: R.",
+    "放弃本图的人工修改，恢复模型候选框并改回待审。快捷键 U。": "Discards manual changes on this image, restores the model candidates and marks it pending again. Shortcut: U.",
+    "D 键切换选择 / 拖动现有框与拖拽补框两种模式。": "Press D to toggle between selecting / dragging existing boxes and drawing new ones.",
+    "快捷键 Ctrl+E（导出 YOLO）。": "Shortcut: Ctrl+E (exports YOLO).",
+    "快捷键：A 接受本图 · R 拒绝本图 · U 恢复模型候选 · Delete 删除所选框 · N / P 下一张 / 上一张图片 · D 切换画框 / 选择模式 · Ctrl+E 导出 YOLO。输入框获得焦点时快捷键不生效。":
+        "Shortcuts: A accepts this image, R rejects it, U restores the model candidates, Delete removes the selected box, "
+        "N / P move to the next / previous image, D toggles draw / select mode, and Ctrl+E exports YOLO. "
+        "Shortcuts are disabled while a text field has focus.",
+    "快捷键：Delete 删除所选框 · D 切换画框 / 选择模式。输入框获得焦点时快捷键不生效。": "Shortcuts: Delete removes the selected box, D toggles draw / select mode. Shortcuts are disabled while a text field has focus.",
+    # C2: Tab 4 auto-save / resume.
+    "标注进度文件版本不兼容或已损坏": "The annotation progress file's version is unsupported, or the file is corrupted.",
+    "标注进度文件缺少必要字段": "The annotation progress file is missing required fields.",
+    "标注进度文件损坏，无法读取：{error}": "The annotation progress file is corrupted and could not be read: {error}",
+    "恢复标注进度": "Resume annotation progress",
+    "检测到本文件夹上次自动标注保存的审核进度（约 {count} 张已审核或已检测），是否恢复？图片内容发生变化的会重新标为待审，不会沿用旧候选框。":
+        "Found saved review progress for this folder (about {count} image(s) reviewed or detected). Resume it? "
+        "Images whose content changed are marked pending again; their old candidates are not reused.",
+    "已恢复 {restored} 张图片的审核进度；{changed} 张图片内容已变化，重新标为待审。": "Resumed review progress for {restored} image(s); {changed} image(s) changed and were marked pending again.",
+    "已恢复 {restored} 张图片的审核进度。": "Resumed review progress for {restored} image(s).",
+    "已忽略损坏的标注进度文件：{error}": "Ignored a corrupted annotation progress file: {error}",
+    "恢复失败，已忽略进度文件：{error}": "Resume failed; the progress file was ignored: {error}",
+    "标注进度未能保存：{error}": "Annotation progress could not be saved: {error}",
+    "清除本地进度": "Clear local progress",
+    "已导出 {format}。是否清除本地保存的审核进度文件？清除后关闭或重开文件夹不会再提供恢复。": "Exported {format}. Clear the locally saved review progress file? Once cleared, closing or reopening this folder will not offer to resume.",
+    # C4: compare models (Tab 1).
+    "模型对比": "Compare models",
+    "模型 A:": "Model A:",
+    "模型 B:": "Model B:",
+    "两个模型使用左侧相同的置信度、框数、推理尺寸、SAHI / 分块与暗光设置，在当前图片上逐个加载、推理、释放，从不同时占用显存。红框为两模型不一致的框（IoU < 0.5 或类别不同）。":
+        "Both models use the same confidence, box count, inference size, SAHI/tiling and low-light settings from the left panel. "
+        "Each is loaded, run on the current image and released in turn; both are never held in memory at once. "
+        "Boxes highlighted in red disagree between the two models (IoU below 0.5, or a different class).",
+    "开始对比": "Start comparison",
+    "导出 PNG…": "Export PNG…",
+    "请先在左侧选择单张图片或图片文件夹作为输入源。": "Select a single image or an image-folder source on the left first.",
+    "图片不可用：{path}": "Image not available: {path}",
+    "无法读取图片：{path}": "Cannot read image: {path}",
+    "请选择两个不同的模型再开始对比。": "Select two different models before starting the comparison.",
+    "训练或自动标注进行中，请先等待结束后再对比模型。": "Training or auto-labeling is running; wait for it to finish before comparing models.",
+    "正在加载 {path}…": "Loading {path}…",
+    "正在对图片推理：{path}…": "Running inference on the image: {path}…",
+    "模型加载失败：{path}": "Model failed to load: {path}",
+    "对比未完成：{error}": "Comparison did not complete: {error}",
+    "对比完成：{a} 共 {boxes_a} 框，{b} 共 {boxes_b} 框。": "Comparison complete: {a} found {boxes_a} box(es); {b} found {boxes_b} box(es).",
+    "一致框 {matched} | {a} 独有 {only_a} | {b} 独有 {only_b}（IoU < 0.5 或类别不同视为不一致）\n{a} 类别统计：{counts_a}\n{b} 类别统计：{counts_b}":
+        "Agreeing boxes: {matched} | Only in {a}: {only_a} | Only in {b}: {only_b} (IoU below 0.5 or a different class counts as disagreeing)\n"
+        "{a} per-class counts: {counts_a}\n{b} per-class counts: {counts_b}",
+    "已导出对比图：{path}": "Exported the comparison image: {path}",
+    "PNG 编码失败": "PNG encoding failed.",
+    "对比模型…": "Compare models…",
+    "在当前图片上串行加载并比较两个选定模型（一次只占用一个模型），结果可导出为 PNG。": "Serially loads and compares two selected models on the current image (only one in memory at a time); the result can be exported as a PNG.",
 }
 
 
