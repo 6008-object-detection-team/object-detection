@@ -106,6 +106,15 @@ class OpenVocabEngine:
         # Keep the original, unfused model and prompts; backend fusion removes
         # an unused detection branch only from its own deepcopy of that model.
         self.model.predictor = None
+        self._release_dropped_predictor()
+
+    def _release_dropped_predictor(self):
+        """Free a predictor that was just dropped, before the next one is built.
+
+        Its fused deepcopy of the model sits in a reference cycle, so without a
+        collection each prompt or mode change left one more copy in VRAM/RAM
+        until Python's cyclic GC happened to run. Called only on such changes.
+        """
         import gc
         gc.collect()
         if str(self.device).startswith("cuda"):
@@ -189,6 +198,9 @@ class OpenVocabEngine:
         if classes != self.current_classes:
             self.model.set_classes(classes)
             self.current_classes = classes
+            # set_classes drops the predictor and leaves the text encoder's
+            # temporaries; free both before _predict_boxes builds a new one.
+            self._release_dropped_predictor()
 
     def _predict_boxes(self, frame, conf, iou, source, max_det):
         """One shared, guarded caller for box-only predictions in every mode."""

@@ -105,6 +105,7 @@ class VisualPromptEngine(OpenVocabEngine):
             # YOLOE.set_classes skips text encoding when names are unchanged.
             # Clearing names ensures visual "bottle" -> text "bottle" re-encodes.
             underlying.names = {}
+            self._release_dropped_predictor()
 
     def unload(self):
         self.release_visual_prompt()
@@ -170,6 +171,8 @@ class VisualPromptEngine(OpenVocabEngine):
             # Explicit embeddings bypass get_text_pe even when labels coincide.
             cached_embedding = embedding.detach().cpu().clone()
             self.model.set_classes([label], embedding)
+            # The previous text or visual predictor is now unreferenced.
+            self._release_dropped_predictor()
             self.visual_embedding = cached_embedding
             self.visual_label = label
             self.current_classes = [label]

@@ -397,6 +397,9 @@ class AIApp(QMainWindow):
         replacement.current_classes = []
         self.engine.model = None
         self.engine = replacement
+        # The worker has stopped: free the previous mode's predictor now rather
+        # than when Python's cyclic GC next runs (the visual release does so too).
+        self.engine._discard_predictor()
         self._update_model_indicator()
 
     def _start_stream(self, target_label, prompts, template=None, *, visual_reference=None,
