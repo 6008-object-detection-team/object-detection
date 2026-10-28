@@ -35,6 +35,8 @@ BACKENDS = {
                       "note": "Same app path, but the static ONNX square letterbox; main PyTorch reference."},
     "pt_cpu_det_square": {"runtime": "pytorch", "device": "CPU", "letterbox": "square", "graph": "det",
                           "note": "PyTorch detection-branch-only conversion with the square letterbox."},
+    "pt_cpu_det_rect": {"runtime": "pytorch", "device": "CPU", "letterbox": "rect", "graph": "det",
+                        "note": "PyTorch detection-branch-only conversion with the app rectangle letterbox."},
     "ort_cpu_seg": {"runtime": "onnxruntime", "device": "CPU", "letterbox": "square", "graph": "seg", "onnx": "seg",
                     "note": "ONNX full segmentation graph; mask prototypes computed, ignored."},
     "ort_cpu_det": {"runtime": "onnxruntime", "device": "CPU", "letterbox": "square", "graph": "det", "onnx": "det",
@@ -492,10 +494,10 @@ def summarise(report, dataset, args):
     reference = backends[REFERENCE]
     pairs = [(name, REFERENCE) for name in backends if name != REFERENCE]
     if "pt_cpu_rect" in backends:
-        # Export plus square letterbox against today's app path; CUDA against the same CPU app path.
+        # Every ONNX graph and every other rectangle-letterbox backend against today's app path.
         pairs += [(name, "pt_cpu_rect") for name in backends
                   if name != "pt_cpu_rect" and (backends[name]["config"]["runtime"] == "onnxruntime"
-                                                or backends[name]["config"]["device"] == "CUDA")]
+                                                or backends[name]["config"]["letterbox"] == "rect")]
     predictions = {name: next(run["predictions"] for run in runs if run["backend"] == name and run["repeat"] == 0)
                    for name in backends}
     report["agreement"] = [{"candidate": candidate, "reference": base, "thresholds": [
