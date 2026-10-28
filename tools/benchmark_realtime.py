@@ -461,6 +461,7 @@ class RunSettings:
     fifo_depth: int = 0
     fifo_max_bytes: int = 512 * 1024 ** 2
     settle_s: float = 1.0
+    camera_format: str = "default"  # the app's camera-format setting (VideoWorker)
 
 
 class RunRecorder:
@@ -578,7 +579,8 @@ def run_once(engine, settings, mode, capture, duration, clock=time.perf_counter)
     from PySide6.QtCore import Qt
     import video_worker
 
-    worker = video_worker.VideoWorker(engine, None, 0, source_kind="camera")
+    worker = video_worker.VideoWorker(engine, None, 0, source_kind="camera",
+                                      camera_format=settings.camera_format)
     worker.class_names = list(settings.classes)
     worker.conf, worker.iou, worker.max_det, worker.imgsz = (
         settings.conf, settings.iou, settings.max_det, settings.imgsz)
@@ -637,6 +639,7 @@ def run_once(engine, settings, mode, capture, duration, clock=time.perf_counter)
         "fifo_memory_dropped": getattr(reader.mailbox, "memory_dropped", None) if reader else None,
         "display_dropped": worker.display_dropped, "displayed": display.displayed,
         "display_metrics": display.last, "source": capture.counters(stopped),
+        "camera_negotiated": worker.camera_info,
         "load_before": list(load_before), "load_after": list(os.getloadavg()),
         "process_cpu_s": (usage_after.ru_utime + usage_after.ru_stime)
                          - (usage_before.ru_utime + usage_before.ru_stime),
@@ -706,7 +709,7 @@ def summarize_run(raw, records, meta):
         "fifo_memory_dropped": raw["fifo_memory_dropped"], "display_dropped": raw["display_dropped"],
         "displayed": raw["displayed"], "display_metrics_last": raw["display_metrics"],
         "source_counters": source, "load_before": raw["load_before"], "load_after": raw["load_after"],
-        "process_cpu_s": raw["process_cpu_s"],
+        "process_cpu_s": raw["process_cpu_s"], "camera_negotiated": raw.get("camera_negotiated"),
     }
 
 
@@ -942,6 +945,8 @@ def build_parser():
     parser.add_argument("--input", type=Path, default=PROJECT / "datasets" / "mini_eval" / "images",
                         help="回放用视频文件或图片目录")
     parser.add_argument("--camera", type=nonnegative_int, default=0, help="摄像头编号（cv2.VideoCapture）")
+    parser.add_argument("--camera-format", choices=("default", "mjpg"), default="default",
+                        help="程序的摄像头格式设置（VideoWorker）：default=原有请求；mjpg=MJPG + 4 缓冲，不支持时按默认运行")
     parser.add_argument("--camera-fourcc", type=parse_fourcc,
                         help="非默认压力测试：请求像素格式（如 MJPG）；程序本身不设置，默认不请求")
     parser.add_argument("--camera-buffers", type=positive_integer,
@@ -988,6 +993,9 @@ def validate_args(parser, args):
         parser.error("--driver-buffers 只用于回放源；真实摄像头使用驱动实际缓冲")
     if (args.camera_fourcc is not None or args.camera_buffers is not None) and args.source != "camera":
         parser.error("--camera-fourcc / --camera-buffers 只用于真实摄像头")
+    if args.camera_format != "default" and (args.source != "camera" or args.camera_fourcc is not None
+                                             or args.camera_buffers is not None):
+        parser.error("--camera-format 只用于真实摄像头，且不与 --camera-fourcc / --camera-buffers 同用")
     if args.device is None:
         parser.error("需要 --device cpu 或 --device cuda；不自动选择设备")
 
@@ -1058,7 +1066,8 @@ def run_session(args):
     started = datetime.now(timezone.utc)
     settings = RunSettings(classes=list(args.classes), conf=args.conf, iou=args.iou, max_det=args.max_det,
                            imgsz=args.imgsz, fifo_depth=args.fifo_depth,
-                           fifo_max_bytes=args.fifo_max_mib * 1024 ** 2, settle_s=args.settle)
+                           fifo_max_bytes=args.fifo_max_mib * 1024 ** 2, settle_s=args.settle,
+                           camera_format=args.camera_format)
     model = resolve_model(args.model)
     clip, data = (load_clip(args.input, args.clip_frames, args.hold, args.frame_size)
                   if args.source == "video" else (None, None))
@@ -1072,7 +1081,11 @@ def run_session(args):
     if args.source == "camera":
         probe = TimedCameraCapture(open_camera(args.camera, args.camera_fourcc), buffers_override=args.camera_buffers)
         try:
-            configure_camera_like_app(probe)
+            if args.camera_format == "default":
+                configure_camera_like_app(probe)
+            else:
+                import video_worker
+                video_worker.configure_camera(probe, args.camera_format)
             camera = {**camera_metadata(args.camera), **describe_capture(probe)}
         finally:
             probe.release()
