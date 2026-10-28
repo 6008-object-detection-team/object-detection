@@ -4,6 +4,7 @@ import json
 import os
 import re
 import tempfile
+import time
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -673,6 +674,44 @@ class AutoAnnotationTabTests(unittest.TestCase):
         self.assertEqual(len(coco["images"]), 2)
         self.assertIn("已导出", panel.status_label.text())
         self.assertFalse(panel.session.dirty)
+
+    def test_stop_keeps_the_in_flight_result_in_its_run(self):
+        window, panel = self.window, self.panel
+        panel.load_folder(self.folder)
+        panel.prompt_input.setText("bottle")
+        engine = window.engine = MagicMock()
+        engine.device, engine.inference_options = "cpu", {}
+
+        def slow(frame, *args, **kwargs):
+            time.sleep(0.3)
+            return frame, [Detection((1., 2., 30., 40.), 0.8, 0, "bottle")], "ok"
+        engine.process_frame.side_effect = slow
+        window.active_model_path = "yoloe-26s-seg.pt"
+        with patch.object(window, "_ensure_detection_model", return_value=True), \
+                patch("auto_annotation_ui.weights_sha256", return_value="e" * 64):
+            panel.start()
+            run, worker = panel.run_index, panel.worker
+            for _ in range(500):
+                self.qt_app.processEvents()
+                if panel.session.entries[0].detected:
+                    break
+                time.sleep(0.01)
+            time.sleep(0.1)  # the next image is now inside detection
+            self.assertTrue(panel.stop_worker())
+            entries = panel.session.entries
+            detected = [entry for entry in entries if entry.detected]
+            # Stored before the run was finalised, not after it with no run.
+            self.assertEqual(len(detected), worker.processed)
+            self.assertGreaterEqual(len(detected), 2)
+            for _ in range(20):
+                self.qt_app.processEvents()
+        self.assertIsNone(panel.worker)
+        self.assertEqual([entry.run_index for entry in entries if entry.detected], [run] * len(detected))
+        self.assertEqual(panel.session.runs[run]["processed"], len(detected))
+        self.assertTrue(panel.session.runs[run]["stopped_by_user"])
+        config = panel.session.runs[run]["config"]
+        self.assertEqual([index for index, _ in panel.session.targets(config)],
+                         [index for index, entry in enumerate(entries) if not entry.detected])
 
     def test_unexported_review_asks_before_discarding(self):
         panel = self.panel

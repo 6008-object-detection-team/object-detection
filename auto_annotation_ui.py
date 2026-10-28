@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Signal, QSignalBlocker
+from PySide6.QtCore import QCoreApplication, QThread, Signal, QSignalBlocker
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
     QComboBox, QCheckBox, QListWidget, QProgressBar, QDoubleSpinBox, QSplitter)
@@ -33,11 +33,13 @@ class AutoAnnotationWorker(QThread):
     error_signal = Signal(object)
     status_signal = Signal(object)
 
-    def __init__(self, engine, enhancer, jobs, options, visual=None, model_sha256=""):
+    def __init__(self, engine, enhancer, jobs, options, visual=None, model_sha256="", run_index=None):
         super().__init__()
         self.engine, self.enhancer = engine, enhancer
         self.jobs, self.options, self.visual = list(jobs), dict(options), visual
         self.model_sha256 = model_sha256
+        # Each result names its run, so a result queued behind Stop keeps its provenance.
+        self.run_index = run_index
         self.running = True
         self.processed = 0
         self.failed = None
@@ -78,7 +80,8 @@ class AutoAnnotationWorker(QThread):
                     break
                 self.processed += 1
                 self.image_done.emit(index, {"boxes": boxes, "width": frame.shape[1], "height": frame.shape[0],
-                                             "sha256": sha256, "elapsed": time.perf_counter() - started, "status": status})
+                                             "sha256": sha256, "elapsed": time.perf_counter() - started, "status": status,
+                                             "run_index": self.run_index})
             self.progress.emit(done, total)
 
     def _fail(self, exc):
@@ -470,7 +473,7 @@ class AutoAnnotationPanel(QWidget):
         app.dce_engine.reset()
         options["model"] = app.active_model_path
         worker = self.worker = AutoAnnotationWorker(engine, app.dce_engine, jobs, options, visual=reference,
-                                                     model_sha256=app.active_model_sha256)
+                                                     model_sha256=app.active_model_sha256, run_index=self.run_index)
         worker.image_done.connect(self.on_image_done)
         worker.image_failed.connect(self.on_image_failed)
         worker.progress.connect(self.on_progress)
@@ -491,6 +494,8 @@ class AutoAnnotationPanel(QWidget):
         if not worker.stop():
             self.notify(message("正在等待当前模型推理完成，请稍后再操作…"))
             return False
+        # The image in flight during wait() has its result queued: store it before the run is finalised.
+        QCoreApplication.sendPostedEvents(self)
         self.on_finished(worker)
         return True
 
@@ -499,7 +504,7 @@ class AutoAnnotationPanel(QWidget):
             return
         try:
             refreshed = self.session.set_candidates(index, result["boxes"], result["width"], result["height"],
-                                                    result["sha256"], self.run_index)
+                                                    result["sha256"], result.get("run_index"))
         except Exception as exc:
             refreshed = False
             self.session.set_error(index, exception_message(exc))
