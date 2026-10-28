@@ -436,6 +436,12 @@ class CommandLineTests(unittest.TestCase):
         self.parse_error(["--source", "video", "--duration", "5", "--settle", "5"])
         self.parse_error(["--modes", "latest"])
 
+    def test_device_must_be_explicit(self):
+        self.assertIn("--device", self.parse_error(["--source", "video"]))
+        self.parse_error(["--source", "video", "--device", "auto"])
+        with self.assertRaises(ValueError):
+            bench.load_engine(Path("unused.pt"), "auto", 640)
+
     def test_mode_parsing_and_rotated_schedule(self):
         self.assertEqual(bench.parse_modes("latest,fifo"), ["latest", "fifo"])
         for value in ("latest,latest", "latest,queue", ""):

@@ -131,6 +131,7 @@
 
 ~~~bash
 # 只能有一个模型进程：与其他实验共用文件锁；摄像头只计时，每次最多 60 秒。
+# --device 必须写明 cpu 或 cuda：工具不自动选设备，CUDA 不可用时停止，不改用 CPU。
 flock <共享锁> python tools/benchmark_realtime.py --source video --device cuda --repeats 3 --duration 30 --output-root <结果目录>
 flock <共享锁> python tools/benchmark_realtime.py --source video --device cpu --repeats 3 --duration 30 --modes latest,sync --driver-buffers 4 --output-root <结果目录>
 flock <共享锁> python tools/benchmark_realtime.py --source camera --device cpu --repeats 3 --duration 30 --output-root <结果目录>

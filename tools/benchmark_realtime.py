@@ -957,7 +957,8 @@ def build_parser():
     parser.add_argument("--iou", type=probability, default=0.45)
     parser.add_argument("--max-det", type=positive_integer, default=300)
     parser.add_argument("--imgsz", type=positive_integer, default=640)
-    parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument("--device", choices=("cpu", "cuda"),
+                        help="必须显式指定；CUDA 不可用时停止，不自动改用 CPU")
     parser.add_argument("--output-root", type=Path, default=PROJECT / "validation" / "realtime_benchmark")
     parser.add_argument("--no-plots", action="store_true")
     parser.add_argument("--summarize", nargs="+", type=Path, metavar="DIR",
@@ -978,6 +979,8 @@ def validate_args(parser, args):
         parser.error("--driver-buffers 只用于回放源；真实摄像头使用驱动实际缓冲")
     if (args.camera_fourcc is not None or args.camera_buffers is not None) and args.source != "camera":
         parser.error("--camera-fourcc / --camera-buffers 只用于真实摄像头")
+    if args.device is None:
+        parser.error("需要 --device cpu 或 --device cuda；不自动选择设备")
 
 
 def resolve_model(path):
@@ -990,10 +993,12 @@ def resolve_model(path):
 
 
 def load_engine(model, device, imgsz):
+    if device not in ("cpu", "cuda"):
+        raise ValueError("设备必须显式为 cpu 或 cuda")
     import torch
     from engines import OpenVocabEngine
-    use_cuda = device == "cuda" or (device == "auto" and torch.cuda.is_available())
-    if device == "cuda" and not torch.cuda.is_available():
+    use_cuda = device == "cuda"
+    if use_cuda and not torch.cuda.is_available():
         raise RuntimeError("已指定 CUDA，但当前 PyTorch 无可用 CUDA；不会自动改用 CPU")
     engine = OpenVocabEngine()
     engine.imgsz = imgsz
