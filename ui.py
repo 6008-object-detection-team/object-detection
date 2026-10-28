@@ -159,9 +159,9 @@ def build_ui(app):
     for title, path in app.MODELS.items():
         app.model_combo.addItem(title, path)
     app.device_combo = QComboBox(); app.device_combo.addItems(["CPU", "CUDA"])
-    app.detection_branch_checkbox = QCheckBox("仅加载检测分支（不生成掩膜，预测相同）")
+    app.detection_branch_checkbox = QCheckBox("仅加载检测分支（不生成掩膜）")
     app.detection_branch_checkbox.setChecked(True)
-    app.detection_branch_checkbox.setToolTip("本程序只画框、不画掩膜。勾选时把分割权重逐张量原样复制到同规格的检测结构，去掉掩膜分支；核对不通过时保留完整分割模型并在状态栏说明。取消勾选则加载完整分割模型。无提示模型始终加载完整模型；下次加载模型时生效。")
+    app.detection_branch_checkbox.setToolTip("本程序只画框、不画掩膜。勾选时把分割权重逐张量原样复制到同规格的检测结构，去掉掩膜分支，检测框与完整模型相同；核对不通过时保留完整分割模型并在状态栏说明。取消勾选则加载完整分割模型。无提示模型始终加载完整模型；下次加载模型时生效。")
     app.camera_format_combo = QComboBox()
     app.camera_format_combo.addItem("驱动默认（1 缓冲，原有设置）", "default")
     app.camera_format_combo.addItem("MJPG（4 缓冲，需摄像头支持）", "mjpg")
