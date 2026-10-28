@@ -13,6 +13,14 @@
 
 **已验证**：新增 25 项测试；完整回归 **333 项，332 通过、1 项因缺少完整 COCO 原始标注缓存跳过**（改动前 308 项，307 通过、1 跳过）。本机 CPU 用 YOLOE-26S 对 `mini_eval` 前 5 张图真实运行文字提示、无提示（26S-PF）和视觉提示三种模式；用脚本模拟审核后导出的 COCO 可被 pycocotools 载入，YOLO 标签逐行解析通过并可被 Ultralytics 数据集读取器读取。**未验证**：本页的 CUDA / DINO、大文件夹、真实人工标注效率、候选框精度和用导出数据训练；审核进度暂不保存到磁盘（开发中）。详见 [自动标注说明](docs/AUTO_ANNOTATION.md)。
 
+## 2026-10-28 ONNX 导出与 ONNX Runtime 对照（工具，未接入界面）
+
+- `tools/export_onnx.py`：用与应用相同的 `set_classes` 把固定类别（默认 `mini_eval` 的 bottle / cup / cell phone，可选 `coco10` 或自定义）编码进 YOLOE-26S，再在 CPU 上导出 ONNX（imgsz 640、opset 17、onnxslim、batch=1、one2many 原始输出，NMS 在图外）。变体：完整 `seg`、仅检测分支 `det`、高宽动态 `det --dynamic-hw`。每个文件旁写 manifest（权重 / 文字编码器 / 文字嵌入 / ONNX 的 SHA-256、类别、opset、形状、版本、源码哈希、主机）。导出单独检查内存与磁盘，不覆盖旧文件，不自动安装依赖。
+- `onnx_engine.py`：`OnnxRuntimeEngine` 只用 ONNX Runtime CPU 与 NumPy，不导入 torch；按 Ultralytics 的 letterbox / NMS / 坐标还原实现，保留 `resource_safety.py` 检查。类别在导出时固定，运行时不能换文字、不能用参考图；请求 CUDA 直接报错，不会悄悄改用 CPU。**界面主检测路径没有改动。**
+- `tools/benchmark_onnx.py`：在 24 图人工标注诊断集上比较 PyTorch 与 ONNX Runtime 的 AP、逐框一致性、时延（每个后端独立进程、轮换顺序、重复 ≥3 次、记录负载）和峰值 RSS。依赖见 `requirements-onnx.txt`（onnx、onnxslim）。
+
+已验证（本机 CPU，5 次重复）：同一输入几何下 ONNX Runtime 与 PyTorch 的框全部一一匹配，最大分数差 < 5e-6，AP 相同。高宽动态的 `det` 图与当前界面路径逐框一致（AP 0.5953），中位时延 2 线程 112.0 → 64.7 ms、8 线程 51.1 → 25.4 ms，进程峰值 RSS 约 1.0 GiB → 271 MiB。静态 640×640 方形输入在这 24 图上 AP 降为 0.5658，完整 seg 图在 ONNX Runtime CPU 上较慢，因此不推荐在 CPU 上使用。实测中发现 Ultralytics 建立预测器时会把 torch 线程重置为 min(8, CPU − 1)，对照工具已恢复并核对线程数。未验证：onnxruntime-gpu / TensorRT（未安装，GPU 只测了 PyTorch CUDA 参考）、Windows、其它型号与类别、FP16/INT8、无提示和视觉提示导出、接入界面。完整回归 **336 项，335 通过、1 项缺少完整 COCO 原始标注缓存而跳过**。协议、完整表格与限制见 [ONNX 导出说明](docs/ONNX_EXPORT.md)；`.onnx`、manifest 和实验原始结果不提交 Git。
+
 ## 2026-10-13 一键纠错更新与同图演示
 
 - 第 3 页默认简化：改类别、补框、删框后，点击 **一键更新并重测当前图片**。输入框里尚未提交的类别也会自动应用；新增类别自动加入范围。不需要另点修改类别、保存、整图审核、导出或训练确认。
