@@ -87,9 +87,11 @@ class VisualPromptEngine(OpenVocabEngine):
         self.reference_shape = None
         self._visual_signature = None
 
-    def load_model(self, model_path, device="CPU"):
+    def load_model(self, model_path, device="CPU", graph="seg"):
+        """Same graph choice as OpenVocabEngine (``"det"`` = detection branch only), so tools that
+        build a visual engine directly can opt in too; the app hands over from a text engine."""
         self.release_visual_prompt()
-        return super().load_model(model_path, device)
+        return super().load_model(model_path, device, graph=graph)
 
     def release_visual_prompt(self):
         """Remove visual state before handing the checkpoint back to text mode."""
