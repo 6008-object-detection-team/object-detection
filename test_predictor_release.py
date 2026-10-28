@@ -69,6 +69,24 @@ class PredictorReleaseTests(unittest.TestCase):
             collect.assert_not_called()
             self.assertIsNotNone(kept())
 
+    def test_no_collection_when_no_predictor_was_dropped(self):
+        # A full collection costs tens of ms with torch loaded; the first prompt
+        # after a load or mode switch has no predictor to free.
+        engine = OpenVocabEngine()
+        engine.model = FakeYOLOE()
+        engine.model.predictor = None
+        with patch.object(OpenVocabEngine, "_release_dropped_predictor") as release:
+            engine._configure_classes(["cup"])
+        release.assert_not_called()
+        self.assertEqual(engine.model.encoded, [["cup"]])
+        visual = VisualPromptEngine()
+        visual.model = FakeYOLOE()
+        visual.model.predictor = None
+        visual.visual_embedding = object()
+        with patch.object(OpenVocabEngine, "_release_dropped_predictor") as release:
+            visual.release_visual_prompt()
+        release.assert_not_called()
+
     def test_without_the_release_the_dropped_predictor_would_survive(self):
         engine = OpenVocabEngine()
         engine.model = FakeYOLOE()

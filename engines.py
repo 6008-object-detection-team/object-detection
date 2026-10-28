@@ -111,9 +111,11 @@ class OpenVocabEngine:
     def _release_dropped_predictor(self):
         """Free a predictor that was just dropped, before the next one is built.
 
-        Its fused deepcopy of the model sits in a reference cycle, so without a
-        collection each prompt or mode change left one more copy in VRAM/RAM
-        until Python's cyclic GC happened to run. Called only on such changes.
+        Its fused deepcopy of the model holds reference cycles (fused layers
+        keep a bound ``forward``), so each prompt or mode change left one more
+        copy in VRAM/RAM until Python's cyclic GC happened to run. A full
+        collection takes tens of ms with torch loaded; call this only after a
+        predictor was actually dropped.
         """
         import gc
         gc.collect()
@@ -196,11 +198,13 @@ class OpenVocabEngine:
         """Text/visual engines condition this head; prompt-free overrides this."""
         classes = list(class_names or ["person", "vehicle", "animal", "bag", "bottle", "cup", "phone"])
         if classes != self.current_classes:
+            had_predictor = getattr(self.model, "predictor", None) is not None
             self.model.set_classes(classes)
             self.current_classes = classes
-            # set_classes drops the predictor and leaves the text encoder's
-            # temporaries; free both before _predict_boxes builds a new one.
-            self._release_dropped_predictor()
+            if had_predictor and self.model.predictor is None:
+                # Free the dropped predictor's model copy before _predict_boxes
+                # builds the next one.
+                self._release_dropped_predictor()
 
     def _predict_boxes(self, frame, conf, iou, source, max_det):
         """One shared, guarded caller for box-only predictions in every mode."""

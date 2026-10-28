@@ -98,6 +98,7 @@ class VisualPromptEngine(OpenVocabEngine):
         self.reference_box = self.reference_shape = self._visual_signature = None
         self.current_classes = []
         if self.model is not None and was_visual:
+            had_predictor = self.model.predictor is not None
             self.model.predictor = None
             underlying = self.model.model
             if hasattr(underlying, "pe"):
@@ -105,7 +106,8 @@ class VisualPromptEngine(OpenVocabEngine):
             # YOLOE.set_classes skips text encoding when names are unchanged.
             # Clearing names ensures visual "bottle" -> text "bottle" re-encodes.
             underlying.names = {}
-            self._release_dropped_predictor()
+            if had_predictor:
+                self._release_dropped_predictor()
 
     def unload(self):
         self.release_visual_prompt()
@@ -170,9 +172,11 @@ class VisualPromptEngine(OpenVocabEngine):
                     embedding = self._encode_visual_prompt(contiguous, box_xyxy, reference_mask)
             # Explicit embeddings bypass get_text_pe even when labels coincide.
             cached_embedding = embedding.detach().cpu().clone()
+            had_predictor = self.model.predictor is not None
             self.model.set_classes([label], embedding)
-            # The previous text or visual predictor is now unreferenced.
-            self._release_dropped_predictor()
+            if had_predictor and self.model.predictor is None:
+                # The previous text or visual predictor is now unreferenced.
+                self._release_dropped_predictor()
             self.visual_embedding = cached_embedding
             self.visual_label = label
             self.current_classes = [label]
