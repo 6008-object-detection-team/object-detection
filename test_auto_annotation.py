@@ -890,6 +890,67 @@ class AutoAnnotationTabTests(unittest.TestCase):
         question.assert_not_called()
         self.assertEqual(len(panel.session), 3)
 
+    def select_preset(self, key):
+        self.panel.preset.setCurrentIndex(self.panel.preset.findData(key))
+
+    def test_accuracy_preset_applies_to_this_run_only_and_is_recorded(self):
+        window, panel = self.window, self.panel
+        panel.load_folder(self.folder)
+        panel.prompt_input.setText("bottle, cup")
+        window.conf_slider.setValue(33)
+        window.resolution_combo.setCurrentIndex(1)
+        window.tile_checkbox.setChecked(True)
+        window.dce_checkbox.setChecked(True)
+        window.model_combo.setCurrentIndex(window.model_combo.findData("yoloe-26s-seg.pt"))
+        self.select_preset("accuracy_first")
+        window.active_model_path = "yoloe-26l-seg.pt"  # what the mocked load would leave behind
+        worker = MagicMock()
+        with patch("auto_annotation_ui.local_weights_present", return_value=True), \
+                patch.object(window, "_ensure_detection_model", return_value=True) as ensure, \
+                patch("auto_annotation_ui.AutoAnnotationWorker", return_value=worker) as factory:
+            panel.start()
+        ensure.assert_called_once_with(["bottle", "cup"], visual=False)
+        self.assertEqual(window.model_combo.currentData(), "yoloe-26l-seg.pt")
+        options = factory.call_args.args[3]
+        expected = {"imgsz": 640, "conf": 0.40, "sliced": True, "slice_size": 320, "slice_overlap": 0.2,
+                    "max_slices": 9, "tiled": False, "low_light": False, "preset": "accuracy_first"}
+        self.assertEqual({key: options[key] for key in expected}, expected)
+        self.assertEqual(options["max_det"], window.max_det_spin.value())
+        run = panel.session.runs[0]
+        self.assertEqual((run["preset"], run["model"], run["slice_size"], run["conf"]),
+                         ("accuracy_first", "yoloe-26l-seg.pt", 320, 0.40))
+        self.assertIn('"preset": "accuracy_first"', run["config"])
+        # The left-side settings are not changed by the preset.
+        self.assertEqual((window.conf_slider.value(), window.resolution_combo.currentData()), (33, 960))
+        self.assertEqual((window.tile_checkbox.isChecked(), window.sahi_checkbox.isChecked(),
+                          window.dce_checkbox.isChecked()), (True, False, True))
+        self.assertIn("精度优先预设", panel.status_label.text())
+        self.assertFalse(panel.preset.isEnabled())
+        # Without a preset the run options are the left-side ones, recorded with preset None.
+        self.select_preset("")
+        self.assertEqual(panel._preset_options({"conf": 0.33}), {"conf": 0.33, "preset": None})
+
+    def test_accuracy_preset_refuses_non_text_prompts_and_missing_weights(self):
+        window, panel = self.window, self.panel
+        panel.load_folder(self.folder)
+        self.select_preset("accuracy_first")
+        before = window.model_combo.currentData()
+        cases = (("text", "", True, "只用于文字提示"), ("visual", "bottle", True, "只用于文字提示"),
+                 ("text", "bottle", False, "未找到本地 YOLOE-26L 权重"))
+        for mode, prompt, present, expected in cases:
+            with self.subTest(mode=mode, prompt=prompt, present=present):
+                panel.prompt_mode.setCurrentIndex(panel.prompt_mode.findData(mode))
+                panel.prompt_input.setText(prompt)
+                with patch("auto_annotation_ui.local_weights_present", return_value=present), \
+                        patch.object(window, "stop_video_stream") as stop, \
+                        patch.object(window, "_ensure_detection_model") as ensure:
+                    panel.start()
+                stop.assert_not_called()
+                ensure.assert_not_called()
+                self.assertIn(expected, panel.status_label.text())
+        self.assertEqual(window.model_combo.currentData(), before)
+        self.assertEqual(panel.session.runs, [])
+
     def test_image_skipped_for_too_many_slices_is_marked_and_listed_in_the_run(self):
         from auto_annotation_ui import AutoAnnotationWorker
         panel = self.panel

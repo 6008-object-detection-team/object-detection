@@ -487,6 +487,14 @@ EN = {
     "已跳过（SAHI 切片过多）：{error}\n本图未检测，本批其余图片继续。": "Skipped (too many SAHI slices): {error}\nThis image was not detected; the rest of the batch continues.",
     "已跳过（切片过多）": "Skipped (too many slices)",
     "自动标注结束：本批检测 {count} 张；{skipped} 张因 SAHI 切片超过上限被跳过（列表中标为“已跳过”）。可改用更大的切片或关闭 SAHI 后再次开始；已审核的图片不会被覆盖。": "Auto-labeling finished: {count} images detected in this run; {skipped} skipped because their SAHI plan exceeds the slice limit (marked Skipped in the list). Choose a larger slice size or turn SAHI off and start again; reviewed images are not overwritten.",
+    "本页预设:": "Page preset:",
+    "使用左侧设置（默认）": "Use the left-side settings (default)",
+    "精度优先：YOLOE-26L + SAHI 320（较慢）": "Accuracy first: YOLOE-26L + SAHI 320 (slower)",
+    "精度优先只作用于本页的这一批：加载 YOLOE-26L（左侧模型栏随之显示 26L，仍只保留一个模型），推理尺寸 640、置信度 0.40、SAHI 320 切片（丢弃被内部切片边截断的框），关闭旧分块和暗光补检；设备和框数沿用左侧，其余左侧设置不变。参数记入导出清单。只支持文字提示。在 240 图人工标注留出集上 AP 更高，但更慢、候选框更多，见 README。": "Accuracy first applies to this run on this page only: it loads YOLOE-26L (the model list on the left then shows 26L; still only one model is loaded), inference size 640, confidence 0.40, SAHI 320 slices (boxes cut by an internal slice edge are dropped), legacy tiles and low-light supplement off. Device and box limit come from the left; other left-side settings are unchanged. The settings are recorded in the export manifest. Text prompts only. On the 240-image human-labelled held-out set it gives higher AP but is slower and returns more candidates; see the README.",
+    "预设只改变本批参数，记入导出清单；需要本地 YOLOE-26L 权重，只支持文字提示。": "A preset changes this run's settings only and is recorded in the export manifest. It needs local YOLOE-26L weights and supports text prompts only.",
+    "自动标注已开始（精度优先预设：YOLOE-26L + SAHI 320）：{count} 张图片，逐张串行。": "Auto-labeling started (accuracy-first preset: YOLOE-26L + SAHI 320): {count} images, one at a time.",
+    "“精度优先”预设只用于文字提示。请输入提示词，或把本页预设改回“使用左侧设置”。": "The accuracy-first preset supports text prompts only. Enter prompts, or set the page preset back to Use the left-side settings.",
+    "未找到本地 YOLOE-26L 权重（{name}）；预设不会下载或替换模型。请先准备权重，或把本页预设改回“使用左侧设置”。": "Local YOLOE-26L weights ({name}) were not found. The preset does not download or substitute a model. Prepare the weights first, or set the page preset back to Use the left-side settings.",
 }
 
 
