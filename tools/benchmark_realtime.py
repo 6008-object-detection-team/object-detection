@@ -75,7 +75,7 @@ RUN_FIELDS = (
     "output_fps", "source_fps", "e2e_p50_ms", "e2e_p95_ms", "e2e_p99_ms", "e2e_max_ms",
     "read_to_result_p50_ms", "read_to_result_p95_ms", "inference_p50_ms", "inference_p95_ms",
     "queue_p50_ms", "queue_p95_ms", "backlog_max", "timestamp_basis",
-    "load1_before", "load1_after", "process_cpu_s",
+    "load1_before", "load1_after", "process_cpu_s", "torch_threads_during_timing",
 )
 NOTICE = (
     "Timing benchmark of camera scheduling only; no accuracy is measured. e2e latency is "
@@ -857,7 +857,11 @@ def host_metadata():
 def device_metadata(engine, requested):
     import torch
     actual = str(engine.device)
-    meta = {"requested": requested, "actual": actual, "torch_threads": torch.get_num_threads(),
+    # Ultralytics resets CPU threads to min(8, CPUs - 1) when it builds the predictor on the
+    # first inference, after this point; each run records the count used for timing.
+    meta = {"requested": requested, "actual": actual, "torch_threads_after_load": torch.get_num_threads(),
+            "torch_threads_note": "sampled after loading, before the predictor exists; see "
+                                  "runs[].torch_threads_during_timing",
             "cuda_available": bool(torch.cuda.is_available()), "torch_cuda": torch.version.cuda}
     if actual.startswith("cuda"):
         properties = torch.cuda.get_device_properties(0)
@@ -870,6 +874,11 @@ def device_metadata(engine, requested):
         except (OSError, subprocess.SubprocessError):
             meta["nvidia_smi"] = None
     return meta
+
+
+def torch_threads():
+    import torch
+    return torch.get_num_threads()
 
 
 def camera_metadata(index):
@@ -1109,6 +1118,7 @@ def run_session(args):
             raw = run_once(engine, settings, mode, capture, args.duration)
             records = frame_records(raw, meta, args.settle)
             summary = summarize_run(raw, records, meta)
+            summary["torch_threads_during_timing"] = torch_threads()  # the predictor exists by now
             records_by_run[run_id] = records
             report["runs"].append(summary)
             report["aggregates"] = aggregate(report["runs"], records_by_run)

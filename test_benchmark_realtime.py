@@ -393,6 +393,8 @@ class OutputTests(unittest.TestCase):
                 run = next(csv.DictReader(stream))
             self.assertEqual(list(run), list(bench.RUN_FIELDS))
             self.assertAlmostEqual(float(run["e2e_p50_ms"]), 27.0)
+        summary["torch_threads_during_timing"] = 8
+        self.assertEqual(bench.run_row(summary)["torch_threads_during_timing"], 8)
 
     def test_aggregate_json_and_markdown_table(self):
         raw = self.raw()
