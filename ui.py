@@ -234,10 +234,6 @@ def build_ui(app):
     from feedback_ui import FeedbackPanel
     app.feedback_panel = FeedbackPanel(app)
     tabs.addTab(app.feedback_panel, "3. 用户纠错 / 迭代优化")
-    annotation_tab = QWidget()
-    annotation_layout = QVBoxLayout(annotation_tab)
-    annotation_hint = QLabel("自动标注功能仍在开发中，当前页面暂不提供自动标注操作。")
-    annotation_hint.setAlignment(Qt.AlignCenter)
-    annotation_hint.setWordWrap(True)
-    annotation_layout.addWidget(annotation_hint, 1)
-    tabs.addTab(annotation_tab, "4. 自动标注（开发中）")
+    from auto_annotation_ui import AutoAnnotationPanel
+    app.annotation_panel = AutoAnnotationPanel(app)
+    tabs.addTab(app.annotation_panel, "4. 自动标注")

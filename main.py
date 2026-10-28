@@ -76,6 +76,7 @@ class AIApp(QMainWindow):
                        for index in range(self.model_combo.count())}
         self.ref_canvas.update()
         self.feedback_panel.retranslate()
+        self.annotation_panel.retranslate()
 
     def show_status(self, value):
         self.ui_language.bind(self.statusBar(), value, "status")
@@ -201,9 +202,16 @@ class AIApp(QMainWindow):
                 visual_label=request.get("visual_label", "object"),
             )
 
+    def annotation_busy(self):
+        panel = getattr(self, "annotation_panel", None)
+        return panel is not None and panel.running
+
     def apply_settings(self):
         if self.training_active:
             QMessageBox.warning(self, "训练进行中", "请先等待纠错训练完成或请求停止，不同时加载推理模型。")
+            return
+        if self.annotation_busy():
+            QMessageBox.warning(self, "自动标注进行中", "自动标注与检测共用一个模型、串行运行；请先在第 4 页停止自动标注。")
             return
         if not self.stop_video_stream():
             return
@@ -395,6 +403,9 @@ class AIApp(QMainWindow):
                       visual_box=None, visual_label="object"):
         if self.training_active:
             QMessageBox.warning(self, "训练进行中", "纠错训练和检测串行运行，请先等待训练结束。")
+            return
+        if self.annotation_busy():
+            QMessageBox.warning(self, "自动标注进行中", "自动标注与检测共用一个模型、串行运行；请先在第 4 页停止自动标注。")
             return
         if self.selected_input_kind in {"image", "image_folder"} and not os.path.isfile(str(self.selected_input_source)):
             QMessageBox.warning(self, "图片不可用", "请选择一个存在的图片文件或图片文件夹。")
@@ -644,7 +655,8 @@ class AIApp(QMainWindow):
         return self._stop_input(clear_request=True)
 
     def release_model(self):
-        if not self.stop_video_stream():
+        # Stop-and-release covers every inference worker, including auto-annotation.
+        if not self.annotation_panel.stop_worker() or not self.stop_video_stream():
             return False
         self.engine.unload()
         self.active_model_path = ""
@@ -659,6 +671,9 @@ class AIApp(QMainWindow):
             event.ignore()
             return
         if self.feedback_panel.dirty and not self.feedback_panel.may_replace():
+            event.ignore()
+            return
+        if not self.annotation_panel.may_discard():
             event.ignore()
             return
         if self.release_model():
