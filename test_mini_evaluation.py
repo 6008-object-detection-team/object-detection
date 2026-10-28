@@ -11,8 +11,8 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 from evaluate_mini_dataset import (
-    build_parser, cap_predictions, coco_metrics, infer, load_dataset, main, mode_conf, precision_recall_f1,
-    preflight_dataset, run_mode,
+    SOURCE_FILES, build_parser, cap_predictions, code_fingerprint, coco_metrics, infer, load_dataset, main,
+    mode_conf, precision_recall_f1, preflight_dataset, run_mode,
 )
 
 
@@ -296,6 +296,27 @@ class PreflightTests(unittest.TestCase):
                 code = main(["--dataset", str(root), "--device", "CUDA"])
             self.assertEqual(code, 1)
             load.assert_not_called()
+
+
+class FingerprintTests(unittest.TestCase):
+    def test_report_fingerprint_names_commit_dirty_state_sources_and_load(self):
+        record = code_fingerprint()
+        self.assertRegex(record["git_head"] or "", r"^[0-9a-f]{40}$")
+        self.assertIsInstance(record["git_dirty"], bool)
+        self.assertEqual(record["git_dirty"], bool(record["dirty_files"]))
+        self.assertEqual(set(record["source_sha256"]), set(SOURCE_FILES))
+        self.assertTrue(all(len(value) == 64 for value in record["source_sha256"].values()))
+        self.assertEqual(len(record["loadavg_start"]), 3)
+        json.dumps(record)  # stored in report.json
+
+    def test_outside_a_git_checkout_only_the_source_hashes_remain(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "engines.py").write_text("# fixture\n", encoding="utf-8")
+            with patch("evaluate_mini_dataset.subprocess.run", side_effect=OSError("no git")):
+                record = code_fingerprint(directory)
+        self.assertIsNone(record["git_head"])
+        self.assertIsNone(record["git_dirty"])
+        self.assertEqual(list(record["source_sha256"]), ["engines.py"])
 
 
 if __name__ == "__main__":

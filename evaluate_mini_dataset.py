@@ -15,6 +15,7 @@ import math
 import os
 import platform
 import statistics
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -534,6 +535,41 @@ def write_summary(output, report):
     atomic_json(output / "report.json", report)
 
 
+# The code this tool runs (AGENTS.md: record code, model, data, parameters and device).
+SOURCE_FILES = ("evaluate_mini_dataset.py", "engines.py", "visual_engine.py", "sliced_inference.py",
+                "resource_safety.py", "detection_utils.py", "detection_branch.py")
+
+
+def load_average():
+    try:
+        return [round(value, 2) for value in os.getloadavg()]
+    except (OSError, AttributeError):  # Windows has no load average
+        return None
+
+
+def code_fingerprint(root=None):
+    """git HEAD, uncommitted tracked files, SHA-256 of the evaluation code, and the host load."""
+    root = Path(root) if root is not None else Path(__file__).resolve().parent
+    record = {"git_head": None, "git_dirty": None, "dirty_files": None, "source_sha256": {},
+              "loadavg_start": load_average()}
+    try:
+        head = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                              capture_output=True, text=True, timeout=20)
+        status = subprocess.run(["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"],
+                                capture_output=True, text=True, timeout=20)
+        if head.returncode == 0:
+            record["git_head"] = head.stdout.strip()
+        if status.returncode == 0:
+            record["dirty_files"] = sorted(line[3:] for line in status.stdout.splitlines() if line.strip())
+            record["git_dirty"] = bool(record["dirty_files"])
+    except (OSError, subprocess.SubprocessError):
+        pass  # not a git checkout (e.g. a release zip): the source hashes below still identify the code
+    for name in SOURCE_FILES:
+        if (root / name).is_file():
+            record["source_sha256"][name] = sha256_file(root / name)
+    return record
+
+
 def versions():
     result = {"python": platform.python_version(), "platform": platform.platform()}
     for package in ("torch", "ultralytics", "sahi", "pycocotools", "numpy", "opencv-python"):
@@ -581,7 +617,7 @@ def main(argv=None):
     output.mkdir(parents=True, exist_ok=True)
     settings = {key: str(value.resolve()) if isinstance(value, Path) else value for key, value in vars(args).items()}
     report = {"status": "running", "created_at": datetime.now(timezone(timedelta(hours=8))).isoformat(),
-              "settings": settings, "versions": versions(), "notice": NOTICE,
+              "settings": settings, "versions": versions(), "code": code_fingerprint(), "notice": NOTICE,
               "image_count": len(dataset["images"]), "all_image_count": dataset["all_image_count"],
               "image_ids": [int(item["id"]) for item in dataset["images"]],
               "prediction_backend": "BoxOnlySegmentationPredictor; no per-object masks",
@@ -638,6 +674,7 @@ def main(argv=None):
             engine = None
             write_summary(output, report)
         report["status"] = "complete"
+        report["code"]["loadavg_end"] = load_average()
         write_summary(output, report)
         print(f"完成：{output / 'summary.md'}", flush=True)
         return 0
