@@ -200,7 +200,7 @@ class AutoAnnotationPanel(QWidget):
         prompt_row.addWidget(self.start_button)
         prompt_row.addWidget(self.stop_button)
         root.addLayout(prompt_row)
-        settings_note = QLabel("使用左侧当前模型、设备、置信度、框数、推理尺寸、SAHI / 分块与暗光设置，开始时记入导出清单，运行中修改不影响本批。逐张串行、batch=1，沿用显存 / 内存保护，不使用跟踪编号。再次开始只处理未检测、失败或参数已变的待审图片，不覆盖人工审核。")
+        settings_note = QLabel("使用左侧当前模型、设备、置信度、框数、推理尺寸、SAHI / 分块与暗光设置（视觉提示方式的置信度改用第 2 页的视觉提示阈值；选了本页预设时以预设为准），开始时记入导出清单，运行中修改不影响本批。逐张串行、batch=1，沿用显存 / 内存保护，不使用跟踪编号。再次开始只处理未检测、失败或参数已变的待审图片，不覆盖人工审核。")
         settings_note.setWordWrap(True)
         root.addWidget(settings_note)
         preset_row = QHBoxLayout()

@@ -170,7 +170,7 @@ EN = {
     "开始自动标注": "Start auto-labeling",
     "停止": "Stop",
     "当前图片推理结束后停止；已完成的候选框保留。释放模型请用左侧按钮。": "Stops after the current image; finished candidates are kept. Use the left-hand button to release the model.",
-    "使用左侧当前模型、设备、置信度、框数、推理尺寸、SAHI / 分块与暗光设置，开始时记入导出清单，运行中修改不影响本批。逐张串行、batch=1，沿用显存 / 内存保护，不使用跟踪编号。再次开始只处理未检测、失败或参数已变的待审图片，不覆盖人工审核。": "Uses the current model, device, confidence, box limit, resolution, SAHI / tiling and low-light settings from the left panel, recorded in the export manifest at start; changes during a run do not affect it. Serial, batch=1, with the existing GPU / memory guards and no tracking IDs. Starting again processes only undetected, failed or re-configured pending images and never overwrites human review.",
+    "使用左侧当前模型、设备、置信度、框数、推理尺寸、SAHI / 分块与暗光设置（视觉提示方式的置信度改用第 2 页的视觉提示阈值；选了本页预设时以预设为准），开始时记入导出清单，运行中修改不影响本批。逐张串行、batch=1，沿用显存 / 内存保护，不使用跟踪编号。再次开始只处理未检测、失败或参数已变的待审图片，不覆盖人工审核。": "Uses the current model, device, confidence, box limit, resolution, SAHI / tiling and low-light settings from the left panel (visual-prompt runs use the Tab 2 visual-prompt threshold instead; a page preset overrides these settings), recorded in the export manifest at start; changes during a run do not affect it. Serial, batch=1, with the existing GPU / memory guards and no tracking IDs. Starting again processes only undetected, failed or re-configured pending images and never overwrites human review.",
     "选择图片文件夹并开始自动标注，再在左侧列表中选择图片审核": "Choose an image folder and start auto-labeling,\nthen pick an image in the list to review it",
     "框的类别（选择或输入）:": "Box class (choose or type):",
     "选择或输入类别：修改所选框的类别，也用于新画的框。": "Choose or type a class: relabels the selected box and is used for newly drawn boxes.",
