@@ -347,7 +347,10 @@ class AIApp(QMainWindow):
         self.conf_value.setText(f"{self.conf_slider.value() / 100:.2f}")
         self.strength_value.setText(f"{self.strength_slider.value()}%")
         if self.worker:
-            self.worker.conf = self.conf_slider.value() / 100.0
+            # A visual-prompt run uses the Tab 2 threshold; moving the global
+            # slider during it must not override that (text / PF keep the slider).
+            visual = isinstance(self.engine, VisualPromptEngine)
+            self.worker.conf = self.visual_conf_spin.value() if visual else self.conf_slider.value() / 100.0
             self.worker.max_det = self.max_det_spin.value()
             self.worker.imgsz = self.resolution_combo.currentData()
             self.worker.tiled = self.tile_checkbox.isChecked()
@@ -371,6 +374,8 @@ class AIApp(QMainWindow):
             return
         reference, box = prompt
         label = self.ref_class_input.text().strip() or "object"
+        # _start_stream switches to VisualPromptEngine before update_detection_options,
+        # so the worker starts with the Tab 2 threshold, not the global slider.
         self._start_stream(self.video_label_tab2, [label], visual_reference=reference,
                            visual_box=box, visual_label=label)
 

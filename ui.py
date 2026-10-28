@@ -1,13 +1,20 @@
 """Reusable Qt widgets and layout construction for the detector UI."""
 from PySide6.QtCore import Qt, QPoint, QRect
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QHBoxLayout,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout,
                                QLabel, QLineEdit, QPushButton, QSlider,
                                QScrollArea, QSpinBox, QTabWidget, QVBoxLayout, QWidget)
 
 from i18n import message
 from ui_language import QMessageBox
 from video_worker import read_image_file
+
+# Single-reference SAVPE scores sit far below text-prompt scores, so visual prompts
+# get their own threshold; text / prompt-free keep the global slider (0.40). Held-out
+# 240-image COCO subset, human GT, app path, 1 reference per class (docs/VISUAL_PROMPT.md):
+# 0.40 -> P 0.979 / R 0.027; 0.03 -> P 0.735 / R 0.337 / F1 0.463. F1 peaks near
+# 0.01-0.02 with lower precision; 0.03 leans towards precision.
+VISUAL_PROMPT_CONF = 0.03
 
 
 class DrawableLabel(QLabel):
@@ -248,6 +255,13 @@ def build_ui(app):
     reference_layout.addLayout(side); reference_layout.addWidget(app.ref_canvas)
     visual_controls = QHBoxLayout(); visual_start = QPushButton("开始检测（视觉提示词）"); visual_start.clicked.connect(app.start_visual_stream)
     visual_stop = QPushButton("关闭检测"); visual_stop.clicked.connect(app.stop_video_stream)
+    app.visual_conf_spin = QDoubleSpinBox()
+    app.visual_conf_spin.setObjectName("visual_conf")
+    app.visual_conf_spin.setDecimals(3); app.visual_conf_spin.setRange(0.001, 1.0)
+    app.visual_conf_spin.setSingleStep(0.01); app.visual_conf_spin.setValue(VISUAL_PROMPT_CONF)
+    app.visual_conf_spin.setToolTip("只用于视觉提示：本页检测（运行中修改立即生效）和第 4 页“视觉提示”方式（开始时读取并记入清单）。\n文字 / 无提示检测仍使用左侧置信度滑块。\n单张参考的视觉提示分数远低于文字提示，默认 0.03；0.40 只适合重新找到与参考几乎相同的物体。\n调低召回更多、误报也更多。")
+    app.visual_conf_spin.valueChanged.connect(app.update_detection_options)
+    visual_controls.addWidget(QLabel("视觉提示阈值:")); visual_controls.addWidget(app.visual_conf_spin)
     visual_controls.addWidget(visual_start); visual_controls.addWidget(visual_stop)
     visual_correct = QPushButton("纠错当前结果"); visual_correct.clicked.connect(app.open_feedback); visual_controls.addWidget(visual_correct)
     app.video_label_tab2 = _video_label(); visual_layout.addWidget(reference); visual_layout.addLayout(visual_controls); visual_layout.addWidget(app.video_label_tab2, 1)

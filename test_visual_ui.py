@@ -1,5 +1,6 @@
 """Prompt/SAHI UI regressions with tiny images, mocked models, and no GPU jobs."""
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,10 +14,13 @@ from PySide6.QtCore import QRect
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication
 
+from engines import OpenVocabEngine
 from main import AIApp
-from ui import DrawableLabel
+from ui import VISUAL_PROMPT_CONF, DrawableLabel
 from video_worker import VideoWorker
 from visual_engine import VisualPromptEngine
+
+HAN = re.compile(r"[\u4e00-\u9fff]")
 
 
 def write_exif_rotated_jpeg(path, width=120, height=60, stripe=20):
@@ -281,6 +285,115 @@ class ReferenceCanvasTests(unittest.TestCase):
         self.assertIs(self.canvas.raw_image, previous[0])
         self.assertIs(self.canvas.original_pixmap, previous[1])
         self.assertEqual(self.canvas.box, previous[2])
+
+
+class VisualThresholdTests(unittest.TestCase):
+    """Visual prompts use the Tab 2 threshold; text / prompt-free keep the global slider."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.qt_app = QApplication.instance() or QApplication([])
+
+    def window(self):
+        window = AIApp()
+
+        def close():
+            window.worker = None
+            window.annotation_panel.worker = None
+            window.annotation_panel.session = None  # closing must not ask about unexported results
+            window.close()
+
+        self.addCleanup(close)
+        window.ref_canvas.raw_image = np.zeros((300, 600, 3), np.uint8)
+        window.ref_canvas.original_pixmap = QPixmap(600, 300)
+        window.ref_canvas.resize(450, 320)
+        window.ref_canvas.box = QRect(0, 47, 450, 225)
+        window.ref_class_input.setText("cup")
+        return window
+
+    @staticmethod
+    def start(window, method):
+        workers = []
+
+        def make(*args, **kwargs):
+            workers.append(MagicMock())
+            return workers[-1]
+
+        with patch.object(window, "_ensure_detection_model", return_value=True), \
+                patch("main.VideoWorker", side_effect=make):
+            method()
+        return workers[-1]
+
+    def test_default_range_and_text_slider_unchanged(self):
+        window = self.window()
+        spin = window.visual_conf_spin
+        self.assertEqual(VISUAL_PROMPT_CONF, 0.03)
+        self.assertEqual(spin.value(), 0.03)
+        self.assertEqual((spin.minimum(), spin.maximum(), spin.decimals()), (0.001, 1.0, 3))
+        self.assertEqual(window.conf_slider.value(), 40)
+        spin.setValue(0.0)
+        self.assertEqual(spin.value(), 0.001)
+        spin.setValue(2.0)
+        self.assertEqual(spin.value(), 1.0)
+
+    def test_visual_run_uses_tab2_threshold_and_text_run_keeps_slider(self):
+        window = self.window()
+        visual = self.start(window, window.start_visual_stream)
+        self.assertIsInstance(window.engine, VisualPromptEngine)
+        self.assertEqual(visual.conf, 0.03)
+        # Moving the global slider during a visual run must not override it ...
+        window.conf_slider.setValue(55)
+        self.assertEqual(visual.conf, 0.03)
+        # ... while the Tab 2 value applies immediately.
+        window.visual_conf_spin.setValue(0.12)
+        self.assertAlmostEqual(visual.conf, 0.12)
+        window.prompt_input.setText("cup")
+        text = self.start(window, window.start_text_stream)
+        self.assertIs(type(window.engine), OpenVocabEngine)
+        self.assertAlmostEqual(text.conf, 0.55)
+        window.visual_conf_spin.setValue(0.2)
+        self.assertAlmostEqual(text.conf, 0.55)
+        window.conf_slider.setValue(40)
+        self.assertAlmostEqual(text.conf, 0.40)
+        # Starting visual detection again picks up the Tab 2 value.
+        again = self.start(window, window.start_visual_stream)
+        self.assertAlmostEqual(again.conf, 0.2)
+
+    def test_tab4_visual_mode_records_tab2_threshold(self):
+        window = self.window()
+        panel = window.annotation_panel
+        self.assertAlmostEqual(panel._run_options(["cup"], "visual")["conf"], 0.03)
+        self.assertAlmostEqual(panel._run_options(["cup"], "text")["conf"], 0.40)
+        self.assertAlmostEqual(panel._run_options([], "prompt_free")["conf"], 0.40)
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        folder = Path(directory.name) / "待标注"
+        folder.mkdir()
+        for index in range(2):
+            cv2.imencode(".png", np.full((40, 50, 3), index * 60, np.uint8))[1].tofile(str(folder / f"图{index}.png"))
+        self.assertTrue(panel.load_folder(folder))
+        panel.prompt_mode.setCurrentIndex(panel.prompt_mode.findData("visual"))
+        window.visual_conf_spin.setValue(0.05)
+        worker = MagicMock()
+        with patch.object(window, "_ensure_detection_model", return_value=True), \
+                patch("auto_annotation_ui.AutoAnnotationWorker", return_value=worker) as factory:
+            panel.start()
+        options = factory.call_args.args[3]
+        self.assertEqual((options["mode"], options["class_names"]), ("visual", ["cup"]))
+        self.assertAlmostEqual(options["conf"], 0.05)
+        run = panel.session.runs[0]
+        self.assertAlmostEqual(run["conf"], 0.05)
+        self.assertIn('"conf": 0.05', run["config"])
+
+    def test_threshold_control_is_translated(self):
+        window = self.window()
+        window.language_combo.setCurrentIndex(window.language_combo.findData("en"))
+        self.qt_app.processEvents()
+        tooltip = window.visual_conf_spin.toolTip()
+        self.assertTrue(tooltip)
+        self.assertFalse(HAN.search(tooltip), tooltip)
+        labels = [label.text() for label in window.findChildren(type(window.conf_value))]
+        self.assertIn("Visual-prompt threshold:", labels)
 
 
 if __name__ == "__main__":
