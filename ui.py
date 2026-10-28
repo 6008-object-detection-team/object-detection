@@ -1,10 +1,13 @@
 """Reusable Qt widgets and layout construction for the detector UI."""
-import cv2
 from PySide6.QtCore import Qt, QPoint, QRect
-from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QHBoxLayout,
                                QLabel, QLineEdit, QPushButton, QSlider,
                                QScrollArea, QSpinBox, QTabWidget, QVBoxLayout, QWidget)
+
+from i18n import message
+from ui_language import QMessageBox
+from video_worker import read_image_file
 
 
 class DrawableLabel(QLabel):
@@ -20,10 +23,28 @@ class DrawableLabel(QLabel):
         self.setStyleSheet("background:#2b2b2b; color:white; border:1px solid #555;")
 
     def set_image(self, path):
-        self.raw_image = cv2.imread(path)
-        self.original_pixmap = QPixmap(path) if self.raw_image is not None else None
+        """Decode a reference like every other image input; on failure keep the old one.
+
+        read_image_file reads bytes with NumPy (non-ASCII Windows paths) and
+        decodes them with OpenCV, which applies EXIF orientation. The pixmap is
+        built from that same BGR array, the one get_visual_prompt hands to the
+        encoder, so a box drawn on screen covers the pixels the user saw.
+        QPixmap(path) ignored EXIF orientation, so rotated phone photos were
+        shown unrotated while a rotated array was encoded.
+        """
+        image = read_image_file(path)
+        if image is None:
+            QMessageBox.warning(self, "无法读取参考图片", message(
+                "无法读取参考图片：{path}\n请检查文件是否损坏或格式是否受支持；当前参考图保持不变。", path=str(path)))
+            return False
+        height, width = image.shape[:2]
+        rgb = image[..., ::-1].copy()
+        self.raw_image = image
+        self.original_pixmap = QPixmap.fromImage(
+            QImage(rgb.data, width, height, rgb.strides[0], QImage.Format_RGB888).copy())
         self.start_pt, self.end_pt, self.box = QPoint(), QPoint(), None
         self.update()
+        return True
 
     def paintEvent(self, event):
         super().paintEvent(event)

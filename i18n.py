@@ -480,6 +480,9 @@ EN = {
     "冻结的骨干/文字/视觉/分割模块发生变化，拒绝注册": "Registration refused: a frozen backbone/text/visual/segmentation module changed.",
     "已保存版本没有有效检测头更新或改变了冻结模块，拒绝注册": "Registration refused: no valid detection-head update, or a frozen module changed.",
     "父模型被外部修改；拒绝注册": "Registration refused: the parent model was changed externally.",
+    # --- imp/visual ---
+    "无法读取参考图片": "Cannot read the reference image",
+    "无法读取参考图片：{path}\n请检查文件是否损坏或格式是否受支持；当前参考图保持不变。": "Cannot read the reference image: {path}\nCheck for corruption or an unsupported format. The current reference is kept.",
 }
 
 

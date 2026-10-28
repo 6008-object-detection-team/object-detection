@@ -1,10 +1,13 @@
 """Prompt/SAHI UI regressions with tiny images, mocked models, and no GPU jobs."""
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import cv2
 import numpy as np
 from PySide6.QtCore import QRect
 from PySide6.QtGui import QPixmap
@@ -14,6 +17,29 @@ from main import AIApp
 from ui import DrawableLabel
 from video_worker import VideoWorker
 from visual_engine import VisualPromptEngine
+
+
+def write_exif_rotated_jpeg(path, width=120, height=60, stripe=20):
+    """Store a landscape JPEG whose EXIF Orientation=6 shows it rotated 90 degrees clockwise.
+
+    The stored pixels have a red stripe on the left; a viewer that honours EXIF
+    (a phone gallery, OpenCV) shows a portrait image with the stripe on top.
+    """
+    image = np.zeros((height, width, 3), np.uint8)
+    image[:, :stripe] = (0, 0, 255)
+    ok, data = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    assert ok
+    # Minimal big-endian TIFF IFD0 with one SHORT entry: 0x0112 Orientation = 6.
+    tiff = (b"MM\x00*\x00\x00\x00\x08" + b"\x00\x01"
+            + b"\x01\x12\x00\x03\x00\x00\x00\x01\x00\x06\x00\x00" + b"\x00\x00\x00\x00")
+    app1 = b"\xff\xe1" + (len(tiff) + 8).to_bytes(2, "big") + b"Exif\x00\x00" + tiff
+    raw = data.tobytes()
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_bytes(raw[:2] + app1 + raw[2:])
+
+
+def red_fraction(image):
+    return float(((image[..., 2] > 200) & (image[..., 1] < 60) & (image[..., 0] < 60)).mean())
 
 
 class VisualWorkerTests(unittest.TestCase):
@@ -194,6 +220,67 @@ class VisualUIControlTests(unittest.TestCase):
         ), patch("torch.cuda.is_available", return_value=False), patch("main.QMessageBox.critical"):
             window.apply_settings()
         self.assertIsNone(window.engine.model)
+
+
+class ReferenceCanvasTests(unittest.TestCase):
+    """Tab 2 canvas: shown pixels, encoded pixels and box coordinates come from one array."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.qt_app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.canvas = DrawableLabel(MagicMock())
+        self.canvas.resize(300, 200)
+
+    def test_exif_rotated_photo_under_non_ascii_path_maps_box_to_seen_pixels(self):
+        path = self.root / "参考图片" / "手机照片_旋转.jpg"
+        write_exif_rotated_jpeg(path)
+        # cv2.imread cannot open non-ASCII paths on Windows; the canvas must not need it.
+        with patch("cv2.imread", return_value=None) as imread:
+            self.assertTrue(self.canvas.set_image(str(path)))
+        imread.assert_not_called()
+        image = self.canvas.raw_image
+        self.assertEqual(image.shape, (120, 60, 3))  # EXIF orientation applied: portrait
+        pixmap = self.canvas.original_pixmap
+        self.assertEqual((pixmap.width(), pixmap.height()), (60, 120))
+        # The pixmap on screen is the array handed to the encoder, pixel for pixel.
+        shown = pixmap.toImage()
+        for x, y in ((30, 5), (30, 100), (2, 2), (57, 117)):
+            colour = shown.pixelColor(x, y)
+            self.assertEqual((colour.blue(), colour.green(), colour.red()), tuple(int(v) for v in image[y, x]))
+        # The user boxes the red stripe where it is shown: the top sixth of the photo,
+        # drawn at 100x200 with a 100-pixel left offset on the 300x200 canvas.
+        self.canvas.box = QRect(100, 0, 100, 33)
+        reference, (left, top, right, bottom) = self.canvas.get_visual_prompt()
+        np.testing.assert_array_equal(reference, image)
+        self.assertEqual((left, top, right), (0, 0, 60))
+        self.assertLessEqual(bottom, 20)
+        self.assertGreater(red_fraction(reference[top:bottom, left:right]), 0.95)
+        # The same pixels go to the template crop used for display.
+        self.assertGreater(red_fraction(self.canvas.get_cropped_template()), 0.95)
+
+    def test_unreadable_reference_warns_and_keeps_previous_reference(self):
+        good = self.root / "参考.png"
+        cv2.imencode(".png", np.full((40, 50, 3), 90, np.uint8))[1].tofile(str(good))
+        self.assertTrue(self.canvas.set_image(str(good)))
+        self.assertEqual(self.canvas.raw_image.shape, (40, 50, 3))
+        self.canvas.box = QRect(10, 10, 50, 50)
+        previous = (self.canvas.raw_image, self.canvas.original_pixmap, self.canvas.box)
+        broken = self.root / "损坏.jpg"
+        broken.write_bytes(b"not an image")
+        with patch("ui.QMessageBox.warning") as warning:
+            self.assertFalse(self.canvas.set_image(str(broken)))
+            self.assertFalse(self.canvas.set_image(str(self.root / "不存在.jpg")))
+        self.assertEqual(warning.call_count, 2)
+        self.assertEqual(warning.call_args_list[0].args[1], "无法读取参考图片")
+        self.assertIn("损坏.jpg", warning.call_args_list[0].args[2])
+        self.assertIs(self.canvas.raw_image, previous[0])
+        self.assertIs(self.canvas.original_pixmap, previous[1])
+        self.assertEqual(self.canvas.box, previous[2])
 
 
 if __name__ == "__main__":
