@@ -82,6 +82,25 @@ class ConfigureCameraTests(unittest.TestCase):
         self.assertEqual(render(camera_status(info), "zh"), "摄像头 MJPG 1280×720 30 FPS，缓冲 4")
         self.assertEqual(render(camera_status(info), "en"), "Camera MJPG 1280×720 30 FPS, 4 buffer(s)")
 
+    def test_mjpg_lost_when_the_size_is_set_restores_the_default_buffer(self):
+        camera = FakeCamera()
+        original = camera.set
+
+        def switching_set(prop, value):
+            result = original(prop, value)
+            if prop == cv2.CAP_PROP_FRAME_HEIGHT:  # no MJPG mode at 1280x720 on this driver
+                camera.values[cv2.CAP_PROP_FOURCC] = float(YUYV)
+            return result
+
+        camera.set = switching_set
+        info = configure_camera(camera, "mjpg")
+        self.assertEqual(camera.requests, [(cv2.CAP_PROP_FOURCC, MJPG),
+                                           (cv2.CAP_PROP_BUFFERSIZE, MJPG_DRIVER_BUFFERS),
+                                           (cv2.CAP_PROP_FRAME_WIDTH, 1280), (cv2.CAP_PROP_FRAME_HEIGHT, 720),
+                                           (cv2.CAP_PROP_BUFFERSIZE, 1)])
+        self.assertTrue(info["mjpg_refused"])
+        self.assertEqual((info["fourcc"], info["buffers"]), ("YUYV", 1))
+
     def test_refused_mjpg_falls_back_to_the_default_requests_visibly(self):
         camera = FakeCamera(supports_mjpg=False)
         info = configure_camera(camera, "mjpg")

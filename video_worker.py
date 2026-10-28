@@ -53,6 +53,10 @@ def configure_camera(capture, camera_format="default"):
     # Keep capture buffers modest; SAHI can enlarge local details.
     capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    if mjpg and fourcc_text(capture.get(cv2.CAP_PROP_FOURCC)) != "MJPG":
+        # The driver accepted MJPG but switched format for this frame size: the result says
+        # "default settings", so the driver queue goes back to the default single buffer too.
+        capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     def number(prop):
         try:

@@ -159,7 +159,7 @@ python tools/benchmark_realtime.py --summarize <结果目录>/<会话>...   # �
 - 左侧设置“摄像头格式”（仅摄像头输入有效，下次开始检测时生效）：
   - **驱动默认（1 缓冲，原有设置）**：默认值，与以前完全相同，按原顺序请求 `CAP_PROP_BUFFERSIZE=1`、宽 1280、高 720，不指定像素格式。
   - **MJPG（4 缓冲，需摄像头支持）**：先请求 `FOURCC=MJPG`（V4L2 和 DirectShow 按格式协商分辨率，所以要在设宽高之前），再请求 4 个驱动缓冲和 1280×720，不请求帧率。最新帧读取线程本来就会丢掉旧帧，多几个驱动缓冲不会让程序读到排队的旧帧。
-  - 驱动不接受 MJPG（读回的 FOURCC 不是 MJPG）时，按默认设置（1 缓冲）继续运行，状态栏注明“摄像头未接受 MJPG，已按默认设置运行”；不重试、不重新打开设备。
+  - 驱动不接受 MJPG（读回的 FOURCC 不是 MJPG）时，按默认设置（1 缓冲）继续运行，状态栏注明“摄像头未接受 MJPG，已按默认设置运行”；不重试、不重新打开设备。设置 1280×720 之后会再读一次 FOURCC：驱动先接受 MJPG、设分辨率时又换回其它格式的，同样把缓冲改回 1（假摄像头单元测试，真实摄像头未遇到）。
 - 两种设置都在开始后读回一次 FOURCC、宽高、帧率和缓冲数，附在状态栏每个结果后面，例如 `摄像头 MJPG 1280×720 30 FPS，缓冲 4`。读不到的值显示为 `?`（DirectShow 通常不报告缓冲数）。
 - 代码：`video_worker.configure_camera()` / `camera_status()`，`VideoWorker(camera_format=...)`，`ui.py` 的下拉框，`main._start_stream` 传入设置。`tools/benchmark_realtime.py --camera-format default|mjpg` 让基准走程序自己的这一设置（与 `--camera-fourcc` / `--camera-buffers` 压力开关互斥）。
 
