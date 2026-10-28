@@ -234,6 +234,15 @@ class CameraTimestampTests(unittest.TestCase):
             self.assertIsNone(frame.capture_ts)
             self.assertEqual(capture.fallback_timestamps, 1)
 
+    def test_buffer_override_replaces_only_the_buffersize_request(self):
+        capture, inner = self.camera(4950.0)
+        capture.buffers_override = 4
+        bench.configure_camera_like_app(capture)
+        self.assertEqual([call.args for call in inner.set.call_args_list],
+                         [(bench.CAP_PROP_BUFFERSIZE, 4), (bench.CAP_PROP_FRAME_WIDTH, 1280),
+                          (bench.CAP_PROP_FRAME_HEIGHT, 720)])
+        self.assertEqual(capture.counters(0.0)["property_requests"][0], [bench.CAP_PROP_BUFFERSIZE, 1.0])
+
     def test_failed_read_and_release_pass_through(self):
         capture, inner = self.camera(4950.0, ok=False)
         self.assertEqual(capture.read(), (False, None))
@@ -423,6 +432,7 @@ class CommandLineTests(unittest.TestCase):
         self.parse_error(["--source", "camera", "--driver-buffers", "4"])
         self.parse_error(["--source", "video", "--camera-fourcc", "MJPG"])
         self.parse_error(["--source", "camera", "--camera-fourcc", "MJPEG"])
+        self.parse_error(["--source", "video", "--camera-buffers", "4"])
         self.parse_error(["--source", "video", "--duration", "5", "--settle", "5"])
         self.parse_error(["--modes", "latest"])
 

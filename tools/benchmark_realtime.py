@@ -323,13 +323,15 @@ class TimedCameraCapture:
 
     The V4L2 buffer timestamp (CAP_PROP_POS_MSEC, CLOCK_MONOTONIC on Linux) is
     used when it is plausible, otherwise capture_ts is None and the time read()
-    returned is used instead. Frames stay in memory; nothing here writes,
-    encodes or displays an image.
+    returned is used instead. ``buffers_override`` replaces the application's
+    CAP_PROP_BUFFERSIZE request for an explicit non-default experiment. Frames
+    stay in memory; nothing here writes, encodes or displays an image.
     """
     MAX_DRIVER_AGE_S = 2.0
 
-    def __init__(self, capture, clock=time.perf_counter, monotonic=time.monotonic):
+    def __init__(self, capture, clock=time.perf_counter, monotonic=time.monotonic, buffers_override=None):
         self.capture, self.clock, self.monotonic = capture, clock, monotonic
+        self.buffers_override, self.property_requests = buffers_override, []
         self.delivered = self.driver_timestamps = self.fallback_timestamps = 0
         self.driver_ages_ms = deque(maxlen=4096)
         self.first_ts = self.last_ts = None
@@ -365,7 +367,13 @@ class TimedCameraCapture:
         return self.capture.get(prop)
 
     def set(self, prop, value):
+        self.property_requests.append([int(prop), float(value)])
+        if prop == CAP_PROP_BUFFERSIZE and self.buffers_override is not None:
+            value = self.buffers_override
         return self.capture.set(prop, value)
+
+    def getBackendName(self):
+        return self.capture.getBackendName()
 
     def release(self):
         self.capture.release()
@@ -376,6 +384,7 @@ class TimedCameraCapture:
                 "delivered_fps": (self.delivered - 1) / span if span else None,
                 "driver_timestamps": self.driver_timestamps,
                 "fallback_timestamps": self.fallback_timestamps,
+                "property_requests": list(self.property_requests), "buffers_override": self.buffers_override,
                 "read_minus_driver_timestamp_ms": describe(self.driver_ages_ms)}
 
 
@@ -926,6 +935,8 @@ def build_parser():
     parser.add_argument("--camera", type=nonnegative_int, default=0, help="摄像头编号（cv2.VideoCapture）")
     parser.add_argument("--camera-fourcc", type=parse_fourcc,
                         help="非默认压力测试：请求像素格式（如 MJPG）；程序本身不设置，默认不请求")
+    parser.add_argument("--camera-buffers", type=positive_integer,
+                        help="非默认实验：用此缓冲数替换程序的 CAP_PROP_BUFFERSIZE=1 请求")
     parser.add_argument("--fps", type=positive_float, default=30.0, help="回放源的固定帧率")
     parser.add_argument("--clip-frames", type=positive_integer, default=300)
     parser.add_argument("--hold", type=positive_integer, default=12, help="图片目录中每张图连续出现的帧数")
@@ -965,8 +976,8 @@ def validate_args(parser, args):
         parser.error("--settle 必须不小于 0 且小于 --duration")
     if args.driver_buffers is not None and args.source != "video":
         parser.error("--driver-buffers 只用于回放源；真实摄像头使用驱动实际缓冲")
-    if args.camera_fourcc is not None and args.source != "camera":
-        parser.error("--camera-fourcc 只用于真实摄像头")
+    if (args.camera_fourcc is not None or args.camera_buffers is not None) and args.source != "camera":
+        parser.error("--camera-fourcc / --camera-buffers 只用于真实摄像头")
 
 
 def resolve_model(path):
@@ -1045,7 +1056,7 @@ def run_session(args):
     output.mkdir(parents=True, exist_ok=False)
     camera = None
     if args.source == "camera":
-        probe = open_camera(args.camera, args.camera_fourcc)
+        probe = TimedCameraCapture(open_camera(args.camera, args.camera_fourcc), buffers_override=args.camera_buffers)
         try:
             configure_camera_like_app(probe)
             camera = {**camera_metadata(args.camera), **describe_capture(probe)}
@@ -1062,7 +1073,7 @@ def run_session(args):
                      "repeats": args.repeats, "duration_s": args.duration, "warmup": args.warmup,
                      "cooldown_s": args.cooldown, "fps": args.fps if args.source == "video" else None,
                      "driver_buffers": args.driver_buffers, "camera_index": args.camera if camera else None,
-                     "camera_fourcc_request": args.camera_fourcc,
+                     "camera_fourcc_request": args.camera_fourcc, "camera_buffers_override": args.camera_buffers,
                      "e2e_definition": "result ready in worker (after draw + BGR->RGB) minus capture time",
                      "display": "headless consumer; Qt rendering excluded",
                      "tracker": "ByteTrack on (application default)", "low_light": False, "sahi": False},
@@ -1087,7 +1098,8 @@ def run_session(args):
                                              buffers=args.driver_buffers or 4,
                                              honour_buffersize=args.driver_buffers is None)
             else:
-                capture = TimedCameraCapture(open_camera(args.camera, args.camera_fourcc))
+                capture = TimedCameraCapture(open_camera(args.camera, args.camera_fourcc),
+                                             buffers_override=args.camera_buffers)
             print(f"[{execution_index + 1}/{len(report['schedule'])}] {run_id} ...", flush=True)
             raw = run_once(engine, settings, mode, capture, args.duration)
             records = frame_records(raw, meta, args.settle)
