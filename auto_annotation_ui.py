@@ -503,6 +503,10 @@ class AutoAnnotationPanel(QWidget):
             return session
         if not data:
             return session
+        if not isinstance(data, dict) or not isinstance(data.get("entries", []), list):
+            # Valid JSON but not a session (e.g. a top-level array): same as a corrupt file.
+            self.notify(message("已忽略损坏的标注进度文件：{error}", error=message("标注进度文件版本不兼容或已损坏")))
+            return session
         reviewed = sum(1 for raw in data.get("entries", [])
                        if isinstance(raw, dict) and (raw.get("state") not in (None, "pending") or raw.get("detected")))
         if not reviewed:
@@ -513,7 +517,7 @@ class AutoAnnotationPanel(QWidget):
             return session
         try:
             resumed = AnnotationSession.from_dict(data, folder, recursive=session.recursive)
-        except ValueError as exc:
+        except (ValueError, TypeError, AttributeError) as exc:
             self.notify(message("恢复失败，已忽略进度文件：{error}", error=exception_message(exc)))
             return session
         if resumed.changed_count:

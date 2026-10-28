@@ -1126,6 +1126,22 @@ class AutoAnnotationTabTests(unittest.TestCase):
         messages = [str(call.args[0]) for call in notify.call_args_list]
         self.assertTrue(any("已忽略损坏的标注进度文件" in value for value in messages), messages)
 
+    def test_progress_file_that_is_not_a_session_object_is_ignored_and_reported(self):
+        panel = self.panel
+        path = session_cache_path(self.folder)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        for text in ('["x"]', '{"schema": "ee6008-auto-annotation-session/1", "entries": 5, "runs": [], "classes": []}'):
+            with self.subTest(text=text):
+                path.write_text(text, encoding="utf-8")
+                panel.session = None
+                with patch.object(panel, "notify", wraps=panel.notify) as notify, \
+                        patch("auto_annotation_ui.QMessageBox.question") as question:
+                    self.assertTrue(panel.load_folder(self.folder))
+                question.assert_not_called()
+                messages = [str(call.args[0]) for call in notify.call_args_list]
+                self.assertTrue(any("已忽略损坏的标注进度文件" in value for value in messages), messages)
+                self.assertEqual(len(panel.session), 3)
+
     def test_export_offers_to_clear_saved_progress(self):
         panel = self.panel
         panel.load_folder(self.folder)
@@ -1233,6 +1249,28 @@ class SessionPersistenceTests(unittest.TestCase):
         self.assertEqual((restored.restored_count, restored.changed_count), (1, 1))
         self.assertEqual(restored.entries[0].state, "pending")
         self.assertEqual(restored.entries[1].state, "accepted")
+
+    def test_non_object_boxes_skip_only_that_record(self):
+        session = detected_session(self.folder, count=2)
+        session.accept(0)
+        session.accept(1)
+        for field, value in (("candidates", ["x"]), ("candidates", "abc"), ("boxes", [1, 2]), ("boxes", {"a": 1})):
+            with self.subTest(field=field, value=value):
+                data = session.to_dict()
+                data["entries"][0][field] = value
+                restored = AnnotationSession.from_dict(data, self.folder, recursive=False)
+                self.assertEqual((restored.restored_count, restored.changed_count), (1, 1))
+                self.assertEqual(restored.entries[0].state, "pending")
+                self.assertEqual(restored.entries[1].state, "accepted")
+
+    def test_non_list_top_level_fields_are_rejected(self):
+        session = detected_session(self.folder, count=1)
+        for field in ("entries", "runs", "classes"):
+            with self.subTest(field=field):
+                data = session.to_dict()
+                data[field] = 5
+                with self.assertRaises(ValueError):
+                    AnnotationSession.from_dict(data, self.folder, recursive=False)
 
 
 if __name__ == "__main__":

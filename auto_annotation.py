@@ -429,10 +429,12 @@ class AnnotationSession:
             raise ValueError(message("标注进度文件版本不兼容或已损坏"))
         if not {"entries", "runs", "classes"}.issubset(data):
             raise ValueError(message("标注进度文件缺少必要字段"))
+        if not all(isinstance(data.get(key) or [], list) for key in ("entries", "runs", "classes")):
+            raise ValueError(message("标注进度文件版本不兼容或已损坏"))
         session = cls(folder, recursive=recursive)
         if isinstance(data.get("created_at"), str) and data["created_at"]:
             session.created_at = data["created_at"]
-        session.set_classes(data.get("classes") or [])
+        session.set_classes(name for name in data.get("classes") or [] if isinstance(name, str))
         session.runs = [dict(run) for run in data.get("runs") or [] if isinstance(run, dict)]
         saved = {raw.get("relative"): raw for raw in data.get("entries") or []
                 if isinstance(raw, dict) and isinstance(raw.get("relative"), str)}
@@ -450,14 +452,18 @@ class AnnotationSession:
                 continue
             try:
                 width, height = raw.get("width"), raw.get("height")
-                candidates = [normalize_box(box) for box in raw.get("candidates") or []]
-                boxes = [normalize_box(box) for box in raw.get("boxes") or []]
+                saved_candidates, saved_boxes = raw.get("candidates") or [], raw.get("boxes") or []
+                if not all(isinstance(items, list) and all(isinstance(box, dict) for box in items)
+                           for items in (saved_candidates, saved_boxes)):
+                    raise ValueError("boxes must be a list of objects")
+                candidates = [normalize_box(box) for box in saved_candidates]
+                boxes = [normalize_box(box) for box in saved_boxes]
                 state = raw.get("state") if raw.get("state") in STATES else "pending"
                 run_index = raw.get("run_index")
                 run_index = run_index if isinstance(run_index, int) and 0 <= run_index < len(session.runs) else None
                 bulk_min_score = raw.get("bulk_min_score")
                 bulk_min_score = float(bulk_min_score) if isinstance(bulk_min_score, (int, float)) else None
-            except (TypeError, ValueError, KeyError):
+            except (TypeError, ValueError, KeyError, AttributeError):
                 changed += 1
                 continue
             entry.width = int(width) if isinstance(width, (int, float)) else None
