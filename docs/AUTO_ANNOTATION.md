@@ -1,6 +1,8 @@
 # 文件夹自动标注（第 4 页，2026-10-28）
 
 > **English summary.** Tab 4 "Auto-labeling" now implements the charter's *assisted annotation* deliverable. It runs the currently selected detector (text prompt, prompt-free, or the Tab 2 visual prompt) over an image folder one image at a time, lets a person accept / edit / reject the candidate boxes, and exports YOLO txt or COCO json. Only accepted or edited images are exported. Every export carries `auto_annotation_manifest.json`, which states that the labels are *model candidates reviewed by a human* (not independent ground truth) and records the model file and SHA-256, prompts, thresholds, device, run times and per-image review method. Verified: 25 new unit / offscreen UI tests (33 after the 2026-10-28 review fixes); the full suite (333 tests: 332 pass, 1 skip; 417 / 416 / 1 after the review fixes); a real CPU run with YOLOE-26S on 5 `mini_eval` images, exported files loaded by pycocotools and by the Ultralytics dataset loader; prompt-free and visual-prompt modes on the same images. Not verified: CUDA in this tab, Grounding DINO in this tab, large folders, a real human labelling session, or the accuracy of the candidates.
+>
+> **Update (2026-10-28, branch `imp/sahi`).** With SAHI on, an image whose slice plan exceeds the 9-slice cap is now skipped and marked "Skipped (too many slices)" instead of stopping the whole batch (the cap is unchanged). A page preset "Accuracy first" runs one batch with YOLOE-26L + border-filtered SAHI 320 at 640 / conf 0.40 without changing the left-side settings, and is recorded in the manifest (`preset`). On the 240-image held-out COCO subset it scores AP 0.505 vs 0.413 for the app default, P / R at 0.40 of 0.764 / 0.663 (default 0.826 / 0.537), about 0.12 s per image on an RTX 5060 Laptop GPU and 1.6–1.9 s on CPU. A real offscreen run of this page with the preset on CUDA reproduced those P / R exactly after a scripted (not human) bulk acceptance.
 
 ## 用途与边界
 
@@ -11,6 +13,7 @@
 ## 操作步骤
 
 1. 在左侧选择模型、设备、置信度、最大框数、推理尺寸、SAHI / 旧分块、暗光设置，与第 1 页共用。开始时这些参数被记录到清单，运行中修改不影响本批。
+   也可在第 4 页 **本页预设** 选 **精度优先：YOLOE-26L + SAHI 320（较慢）**：本批改用 YOLOE-26L、640、置信度 0.40、SAHI 320（边缘过滤）、关闭旧分块和暗光补检；设备和最大框数沿用左侧。左侧其它控件不变，只有模型栏会显示实际加载的 26L（仍只保留一个模型）。预设名称和参数记入清单（`preset: "accuracy_first"`）。只支持文字提示；本地没有真实的 `yoloe-26l-seg.pt`（或只有 Git LFS 指针）时拒绝开始，不会下载或换成别的模型。240 图留出集上的精度与耗时见 [评价流程](evaluation.md#sahi-边缘过滤2026-10-28)：AP 更高、召回更高，但精确率略低（要审的误检更多），GPU 约 0.12 s/图，CPU 约 1.6–1.9 s/图。
 2. 第 4 页点 **选择图片文件夹…**。支持 JPG / JPEG / PNG / BMP，按相对路径排序，中文路径可用。勾选 **包含子文件夹** 会重新扫描；含 `auto_annotation_manifest.json` 的旧导出文件夹会被跳过。
 3. 选择提示方式：
    - **文字 / 无提示（本页提示词）**：输入 `bottle, cup, cell phone` 等使用原版权重；留空则与第 1 页一样切换到同规格 `*-seg-pf.pt`（4,585 类），不会用旧的 7 类占位列表代替。修改版和 DINO 没有无提示版，留空时拒绝开始。
@@ -33,7 +36,7 @@
 | ✓ | 已接受（逐张或批量） | 是 |
 | ✎ | 已修改（接受时框与候选不同，或接受后又改动） | 是 |
 | ✗ | 已拒绝 | 否 |
-| ! | 读取 / 检测失败 | 否 |
+| ! | 读取 / 检测失败，或“已跳过（切片过多）” | 否 |
 
 导出最低分数只过滤**按分数批量接受**的图片（没有人逐张看过）中低于该分数的框。逐张接受或修改的图片按人工结果原样导出：人看过并接受的低分框是人工确认的目标，删掉会在训练标签里变成漏标。批量接受的图片如果没有框达到该分数，就不导出，而不是写一个空标签（空标签表示“图中没有目标”，没有人确认过）；清单列出这些图片，并记录每张图被分数过滤的框数。
 
@@ -50,12 +53,12 @@
 
 - `images/` 副本与 `annotations.json`：`info`、`licenses`、`images`（`id` 从 1、`width` / `height`）、`annotations`（`bbox` 为 `[x, y, w, h]`、`area`、`iscrowd: 0`、`id` 从 1）、`categories`（`id` 从 1）。每个标注另有 `attributes.origin`（`model` / `model_edited` / `human`）与 `attributes.model_score`。
 
-**清单** `auto_annotation_manifest.json`（两种格式都有）：`label_provenance: "model candidates reviewed by a human"`、`human_ground_truth: false`、审核统计（逐张接受 / 批量接受 / 已修改 / 未导出的拒绝与待审数）、导出过滤、源文件夹、类别、每次检测运行（模型文件、标题、SHA-256、引擎、设备、提示方式与提示词、置信度、IoU、框数、尺寸、SAHI / 分块 / 暗光、推理选项、视觉参考图哈希与框、开始 / 结束时间、处理数、是否被停止或出错）、相关源码 SHA-256、每张图的源文件 SHA-256、宽高、状态、审核方式、框来源计数、被导出最低分数过滤的框数（`filtered_by_min_score`）和零面积未写入的框数，以及因过滤后无框而未导出的批量接受图片。DINO 使用 Hugging Face 缓存，`model_sha256` 记为空。
+**清单** `auto_annotation_manifest.json`（两种格式都有）：`label_provenance: "model candidates reviewed by a human"`、`human_ground_truth: false`、审核统计（逐张接受 / 批量接受 / 已修改 / 未导出的拒绝与待审数）、导出过滤、源文件夹、类别、每次检测运行（模型文件、标题、SHA-256、引擎、设备、提示方式与提示词、置信度、IoU、框数、尺寸、SAHI / 分块 / 暗光、推理选项、本页预设 `preset`、视觉参考图哈希与框、开始 / 结束时间、处理数、因切片过多跳过的文件 `skipped_too_many_slices`、是否被停止或出错）、相关源码 SHA-256、每张图的源文件 SHA-256、宽高、状态、审核方式、框来源计数、被导出最低分数过滤的框数（`filtered_by_min_score`）和零面积未写入的框数，以及因过滤后无框而未导出的批量接受图片。DINO 使用 Hugging Face 缓存，`model_sha256` 记为空。
 
 ## 资源与串行
 
 - 复用应用当前的单个模型：开始前停止第 1 / 2 页检测，按提示内容走原有 `_ensure_detection_model` 加载 / 切换路径（`prepare_device`、GPU 文件锁、3 GiB 预算、加载前 4 GiB 空闲显存）。没有新增 GPU 预算逻辑。
-- 每张图都走原有 `process_frame` → `detect` 路径，逐次执行 `preflight_inference`（RAM ≥ 1.5 GiB、推理前空闲显存 ≥ 1 GiB、尺寸限制）。超过 1600 万像素的单张图在推理前标为失败并跳过；其它资源限制、OOM 或推理异常会停止整批，不重试、不切换设备。
+- 每张图都走原有 `process_frame` → `detect` 路径，逐次执行 `preflight_inference`（RAM ≥ 1.5 GiB、推理前空闲显存 ≥ 1 GiB、尺寸限制）。超过 1600 万像素的单张图在推理前标为失败并跳过；开启 SAHI 时，切片数超过 9 块上限的图片（例如 512 切片下的 1080p 图、任何切片下的 1200 万像素照片）同样在推理前跳过，列表标为“已跳过（切片过多）”，提示中写明哪个切片尺寸可以放下或需要先缩小图片；本批其余图片继续，结束时状态栏汇总跳过数量，文件名记入该次运行的 `skipped_too_many_slices`。9 块上限不变，跳过的图片下次开始时会重试。其它资源限制、OOM 或推理异常会停止整批，不重试、不切换设备。
 - 不使用 ByteTrack（编号不是类别）；开启暗光时每张图重置平滑状态。
 - 运行中第 1 / 2 页“开始检测”和“应用设置 / 加载模型”会提示先停止自动标注；“停止并释放模型 / 显存”先停止自动标注再释放模型和 GPU 锁；纠错训练开始前同样会释放。
 
@@ -68,10 +71,12 @@
 - **真实运行（文字提示）**：提交 `2a8b039`（之后只增加了 YOLO 标签重名检查与接受时的错误提示，均有单元测试，未重跑真实模型）；YOLOE-26S（`yoloe-26s-seg.pt`，SHA-256 `48f24206…df0654`），CPU，640，置信度 0.25，提示 `bottle, cup, cell phone`；`datasets/mini_eval` 前 5 张图片复制到中文路径文件夹。5 张全部完成检测（候选 1 / 0 / 5 / 2 / 3）。随后用**脚本模拟**的审核动作（不是人工审核）：接受 1 张、在 1 张上补一个手工框并接受（已修改）、拒绝 1 张、批量接受 ≥ 0.50 的 2 张。导出 YOLO 与 COCO 各 4 张图 / 6 个框；pycocotools 成功载入（4 图、6 标注、3 类）；YOLO 标签逐行解析通过（5 列、类别号有效、6 位小数、[0, 1]），Ultralytics `check_det_dataset` 与 `YOLODataset` 读到 4 张图 / 6 个框；清单中模型哈希与权重文件实测一致。单次运行逐张推理用时：首张约 1.6 s（含文字嵌入与预热），其余 0.07–0.09 s（负载约 4.3）；仅为功能记录，不作速度结论。
 - **真实运行（无提示 / 视觉提示）**：同 5 张图。留空提示自动切换到 `yoloe-26s-seg-pf.pt`（4,585 类，未发送任何文字类别），共 100 个候选，按 0.25 批量接受后导出的 COCO 含 58 个类别并可被 pycocotools 载入。视觉提示使用 `mini_eval/references` 中人工复核的 cup 参考框（绕过第 2 页画布坐标换算，该换算已有单独测试），5 张中 1 张出现 1 个 cup 候选，导出 COCO 可载入。候选数量不代表精度。
 - **截图**：离屏界面中文 / 英文截图已逐张查看，英文状态下第 4 页没有未翻译文字（截图不提交）。
+- **SAHI 跳过与“精度优先”预设（2026-10-28，分支 `imp/sahi`，CUDA）**：新增 6 项测试（模拟引擎下 640×480 / 1080p / 4032×3024 混合文件夹只跳过超限的图；真实 `process_frame` + 桩检测器下 1080p 图不再结束整批；无效切片设置仍停止整批；预设只改本批参数、写入运行记录、不动左侧控件；非文字提示或缺少 26L 权重时在停止检测和加载前拒绝；跳过状态的中英文显示与运行记录）。真实运行：离屏界面加载 240 张留出 COCO 图，选预设，开始后由应用加载 YOLOE-26L（SHA-256 `a612d2d5…360da9`）到 CUDA，240 张全部完成、无跳过；脚本按分数 0 批量接受（**不是人工审核**）后导出 COCO，与人工 GT 比对得 P / R@0.40 = 0.764 / 0.663，与直接调用检测路径的结果一致；清单记录 `preset: accuracy_first`、`slice_size: 320`、`conf: 0.4`；左侧置信度、尺寸、SAHI 开关和切片尺寸运行前后不变，模型栏变为 26L。工作线程每张中位 0.121 s。
 
 ## 未验证 / 开发中
 
-- 未在本页运行 CUDA 或 Grounding DINO；未测试上百张以上的大文件夹耗时与内存。
+- 除“精度优先”预设的一次 240 图文字提示运行外，未在本页运行 CUDA；未运行 Grounding DINO；未测试上千张的大文件夹耗时与内存。
+- 预设只在最长边 ≤ 640 的 COCO 图上评价过；视觉提示、无提示和其它模型没有预设。
 - 未进行真实人工标注会话，也未测量标注效率；未评价候选框精度（需要人工 GT，且不能用本页导出的标签充当）。
 - 未用导出数据实际训练模型；只验证了 Ultralytics 能读取 YOLO 导出。
 - 审核进度不落盘，关闭前须导出；不支持多边形 / 分割标注。
