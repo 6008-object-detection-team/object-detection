@@ -304,6 +304,20 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(manifest["images"][0]["source_sha256"], hashlib.sha256((self.folder / "img0.png").read_bytes()).hexdigest())
         self.assertIn("auto_annotation.py", manifest["code_sha256"])
 
+    def test_manifest_counts_only_boxes_that_are_written(self):
+        # A zero-width box (e.g. a slip of the mouse) cannot be written to YOLO or COCO.
+        self.session.update_boxes(0, candidates() + [{"label": "cup", "xyxy": [40., 10., 40., 50.]}])
+        self.session.accept(0)
+        for fmt, export in (("yolo", export_yolo), ("coco", export_coco)):
+            target = self.root / "out" / fmt
+            result = export(self.session, target)
+            manifest = json.loads((target / MANIFEST_NAME).read_text(encoding="utf-8"))
+            counted = [row["exported_boxes"] for row in manifest["images"]]
+            self.assertEqual(counted, [2, 2])
+            self.assertEqual(result["boxes"], sum(counted))
+            self.assertEqual([sum(row["box_origins"].values()) for row in manifest["images"]], counted)
+        self.assertEqual(len((self.root / "out" / "yolo" / "labels" / "img0.txt").read_text().splitlines()), 2)
+
     def test_refuses_unsafe_or_empty_exports_and_cleans_staging(self):
         with self.assertRaises(ValueError):
             export_yolo(self.session, self.folder / "labels_here")

@@ -344,11 +344,16 @@ class AnnotationSession:
 
     def export_boxes(self, entry, min_score=0.0):
         """Edited images are exported as reviewed; the score filter only trims
-        untouched model boxes in images accepted without edits."""
+        untouched model boxes in images accepted without edits. Boxes with no area
+        inside the image are dropped here, so the plan, the manifest and the
+        writers all count the same boxes."""
         boxes = []
         for box in entry.boxes:
             if entry.state == "accepted" and box_origin(box, entry.candidates) == "model" \
                     and box["score"] is not None and box["score"] < min_score:
+                continue
+            x1, y1, x2, y2 = clip_box(box["xyxy"], entry.width, entry.height)
+            if x2 <= x1 or y2 <= y1:
                 continue
             boxes.append(box)
         return boxes
