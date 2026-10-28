@@ -480,6 +480,13 @@ EN = {
     "冻结的骨干/文字/视觉/分割模块发生变化，拒绝注册": "Registration refused: a frozen backbone/text/visual/segmentation module changed.",
     "已保存版本没有有效检测头更新或改变了冻结模块，拒绝注册": "Registration refused: no valid detection-head update, or a frozen module changed.",
     "父模型被外部修改；拒绝注册": "Registration refused: the parent model was changed externally.",
+    # --- imp/sahi ---
+    "本图 {width}×{height} 用 {size} 像素切片需要 {count} 块，超过 {maximum} 块上限；可改用 {fit} 像素切片，或缩小输入图像。": "This {width}×{height} image needs {count} slices at {size} px (limit {maximum}). Use {fit} px slices or resize the image.",
+    "本图 {width}×{height} 用 {size} 像素切片需要 {count} 块，超过 {maximum} 块上限；界面提供的切片尺寸都放不下，请先缩小输入图像或关闭 SAHI。": "This {width}×{height} image needs {count} slices at {size} px (limit {maximum}). No offered slice size fits. Resize the input image or turn SAHI off.",
+    "已跳过（SAHI 切片过多）": "Skipped (too many SAHI slices)",
+    "已跳过（SAHI 切片过多）：{error}\n本图未检测，本批其余图片继续。": "Skipped (too many SAHI slices): {error}\nThis image was not detected; the rest of the batch continues.",
+    "已跳过（切片过多）": "Skipped (too many slices)",
+    "自动标注结束：本批检测 {count} 张；{skipped} 张因 SAHI 切片超过上限被跳过（列表中标为“已跳过”）。可改用更大的切片或关闭 SAHI 后再次开始；已审核的图片不会被覆盖。": "Auto-labeling finished: {count} images detected in this run; {skipped} skipped because their SAHI plan exceeds the slice limit (marked Skipped in the list). Choose a larger slice size or turn SAHI off and start again; reviewed images are not overwritten.",
 }
 
 

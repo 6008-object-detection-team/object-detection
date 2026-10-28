@@ -21,7 +21,7 @@ from auto_annotation import (LABEL_PROVENANCE, MANIFEST_NAME, AnnotationSession,
                              detect_candidates, export_coco, export_yolo, read_image_with_sha,
                              scan_folder, yolo_line)
 from detection_utils import Detection
-from i18n import EN
+from i18n import EN, render
 from resource_safety import ResourceLimitError
 
 HAN = re.compile(r"[\u4e00-\u9fff]")
@@ -523,6 +523,55 @@ class WorkerTests(unittest.TestCase):
         digest.assert_called_once_with("yoloe-26s-seg.pt")
         self.assertEqual(worker.model_sha256, "c" * 64)
 
+    def sized_jobs(self, sizes):
+        folder = self.jobs[0][1].parent / "尺寸"
+        self.jobs = [(index, folder / f"{index}.png") for index in range(len(sizes))]
+        for (_, path), (width, height) in zip(self.jobs, sizes):
+            write_image(path, width, height)
+
+    def test_sahi_plan_over_the_slice_cap_skips_only_that_image(self):
+        from auto_annotation_ui import SLICE_SKIP_PREFIX
+        # 1080p needs 15 slices at 512 px (640 px would fit); a 12 MP photo fits at no offered size.
+        self.sized_jobs([(640, 480), (1920, 1080), (640, 480), (4032, 3024), (800, 600)])
+        self.options.update(sliced=True, slice_size=512)
+        worker, events = self.run_worker()
+        messages = {}
+        worker.image_failed.connect(lambda index, value: messages.__setitem__(index, value))
+        worker.run()
+        self.assertEqual([index for index, _ in events["done"]], [0, 2, 4])
+        self.assertEqual((events["failed"], worker.skipped), ([1, 3], [1, 3]))
+        self.assertEqual((worker.processed, worker.failed, events["error"]), (3, None, []))
+        self.assertEqual(self.engine.process_frame.call_count, 3)
+        self.assertEqual(events["progress"][-1], (5, 5))
+        self.assertTrue(all(value.startswith(SLICE_SKIP_PREFIX) for value in messages.values()))
+        self.assertIn("可改用 640 像素切片", messages[1])
+        self.assertIn("界面提供的切片尺寸都放不下", messages[3])
+        self.assertIn("Use 640 px slices", render(messages[1], "en"))
+
+    def test_real_detection_path_finishes_a_folder_with_one_1080p_image(self):
+        # Before, the 1080p image ended the batch after image 0 (scan evidence sahi_batch_abort.txt).
+        from engines import OpenVocabEngine
+        engine = self.engine = OpenVocabEngine()
+        engine.detect = MagicMock(return_value=[])
+        self.sized_jobs([(640, 480), (1920, 1080), (640, 480), (800, 600)])
+        self.options.update(sliced=True, slice_size=512)
+        worker, events = self.run_worker()
+        with patch("sliced_inference.preflight_inference"):
+            worker.run()
+        self.assertEqual([index for index, _ in events["done"]], [0, 2, 3])
+        self.assertEqual((events["failed"], events["error"], worker.failed), ([1], [], None))
+        # Full image + slices: 2 slices for each 640x480 image, 4 for 800x600 at 512 px.
+        self.assertEqual(engine.detect.call_count, (1 + 2) + (1 + 2) + (1 + 4))
+
+    def test_invalid_slice_settings_still_stop_the_batch(self):
+        self.options.update(sliced=True, slice_size=100)
+        self.engine.process_frame.side_effect = ValueError("切片尺寸必须是 128 到 960 之间的整数")
+        worker, events = self.run_worker()
+        worker.run()
+        self.engine.process_frame.assert_called_once()
+        self.assertEqual((worker.skipped, events["done"]), ([], []))
+        self.assertIn("ValueError", worker.failed)
+
 
 class AutoAnnotationTabTests(unittest.TestCase):
     @classmethod
@@ -840,6 +889,26 @@ class AutoAnnotationTabTests(unittest.TestCase):
             panel.recursive.setChecked(False)
         question.assert_not_called()
         self.assertEqual(len(panel.session), 3)
+
+    def test_image_skipped_for_too_many_slices_is_marked_and_listed_in_the_run(self):
+        from auto_annotation_ui import AutoAnnotationWorker
+        panel = self.panel
+        panel.load_folder(self.folder)
+        reason = AutoAnnotationWorker(MagicMock(), MagicMock(), [], {"sliced": True, "slice_size": 512}) \
+            ._slice_skip_reason(np.zeros((1080, 1920, 3), np.uint8))
+        panel.run_index = panel.session.begin_run({"config": "{}"})
+        panel.on_image_failed(1, reason)
+        self.assertIn("已跳过（切片过多）", panel.image_list.item(1).text())
+        worker = panel.worker = MagicMock(skipped=[1], processed=2, failed=None, running=True, model_sha256="a" * 64)
+        panel.on_finished(worker)
+        self.assertEqual(panel.session.runs[0]["skipped_too_many_slices"], ["图1.png"])
+        self.assertIn("1 张因 SAHI 切片超过上限被跳过", panel.status_label.text())
+        self.assertEqual(panel.session.counts()["failed"], 1)
+        self.switch("en")
+        self.assertIn("Skipped (too many slices)", panel.image_list.item(1).text())
+        self.assertIn("1 skipped", panel.status_label.text())
+        # Starting again retries the skipped image (e.g. after choosing a larger slice size).
+        self.assertIn(1, [index for index, _ in panel.session.targets(None)])
 
 
 if __name__ == "__main__":

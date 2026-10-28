@@ -5,6 +5,7 @@ import numpy as np
 
 from detection_utils import Detection
 from resource_safety import ResourceLimitError
+from i18n import Message, render
 from sliced_inference import detect_sliced, merge_sahi, touches_internal_edge, validate_slice_plan
 
 
@@ -99,6 +100,22 @@ class SahiTests(unittest.TestCase):
         # A crop that covers the whole image has no internal edge.
         border = dict(left=0, top=0, crop_width=320, crop_height=320, width=320, height=320)
         self.assertFalse(touches_internal_edge((0, 0, 320, 320), **border))
+
+    def test_too_many_slices_names_a_size_that_fits_or_none(self):
+        with self.assertRaises(ResourceLimitError) as raised:
+            validate_slice_plan((1080, 1920, 3), 512)
+        error = raised.exception.args[0]
+        self.assertIsInstance(error, Message)
+        self.assertEqual((error.values['count'], error.values['fit']), (15, 640))
+        self.assertIn('640', render(error, 'en'))
+        for shape, size in (((3024, 4032, 3), 320), ((2160, 3840, 3), 640)):
+            with self.subTest(shape=shape), self.assertRaises(ResourceLimitError) as raised:
+                validate_slice_plan(shape, size)
+            error = raised.exception.args[0]
+            self.assertNotIn('fit', error.values)
+            self.assertNotIn('增大', error)
+            self.assertIn('Resize the input image or turn SAHI off', render(error, 'en'))
+        self.assertEqual(len(validate_slice_plan((1080, 1920, 3), 640)), 8)
 
     def test_invalid_plan_stops_before_materializing_crops(self):
         for kwargs in ({'slice_size': 127}, {'slice_overlap': 1}, {'max_slices': 10}, {'slice_size': 320.5}):

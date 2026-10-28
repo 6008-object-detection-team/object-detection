@@ -8,8 +8,19 @@ from detection_utils import Detection
 from resource_safety import ResourceLimitError, preflight_inference
 from i18n import message
 
+# Slice sizes offered by the GUI combo (ui.py); used only to word the advice.
+GUI_SLICE_SIZES = (320, 512, 640)
 # A crop box within this many pixels of an internal crop edge is a truncated object.
 EDGE_MARGIN = 3
+
+
+def slice_count(shape, slice_size, slice_overlap=0.2):
+    """Rows x columns of the safety plan (no crops are created)."""
+    height, width = shape[:2]
+    stride = int(slice_size) - int(slice_size * slice_overlap)
+    rows = 1 + max(0, int(np.ceil((height - slice_size) / stride)))
+    cols = 1 + max(0, int(np.ceil((width - slice_size) / stride)))
+    return rows * cols
 
 
 def validate_slice_plan(shape, slice_size=512, slice_overlap=0.2, max_slices=9):
@@ -23,11 +34,19 @@ def validate_slice_plan(shape, slice_size=512, slice_overlap=0.2, max_slices=9):
     if height <= 0 or width <= 0:
         raise ValueError('输入图像为空')
     # Bound the work before asking SAHI to materialize any crops.
-    stride = int(slice_size) - int(slice_size * slice_overlap)
-    rows = 1 + max(0, int(np.ceil((height - slice_size) / stride)))
-    cols = 1 + max(0, int(np.ceil((width - slice_size) / stride)))
-    if rows * cols > max_slices:
-        raise ResourceLimitError(message('本图需要 {count} 块，超过 {maximum} 块上限；请增大切片或缩小输入图像。', count=rows * cols, maximum=max_slices))
+    count = slice_count(shape, slice_size, slice_overlap)
+    if count > max_slices:
+        values = dict(width=width, height=height, size=int(slice_size), count=count, maximum=max_slices)
+        fits = [size for size in GUI_SLICE_SIZES
+                if size > slice_size and slice_count(shape, size, slice_overlap) <= max_slices]
+        if fits:
+            raise ResourceLimitError(message(
+                '本图 {width}×{height} 用 {size} 像素切片需要 {count} 块，超过 {maximum} 块上限；可改用 {fit} 像素切片，或缩小输入图像。',
+                fit=fits[0], **values))
+        # No offered size fits: "use larger slices" would be wrong advice.
+        raise ResourceLimitError(message(
+            '本图 {width}×{height} 用 {size} 像素切片需要 {count} 块，超过 {maximum} 块上限；界面提供的切片尺寸都放不下，请先缩小输入图像或关闭 SAHI。',
+            **values))
     from sahi.slicing import get_slice_bboxes
     boxes = get_slice_bboxes(height, width, int(slice_size), int(slice_size),
                              auto_slice_resolution=False,

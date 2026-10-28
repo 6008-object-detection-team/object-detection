@@ -16,13 +16,16 @@ from engines import PromptFreeEngine
 from feedback_ui import CorrectionCanvas
 from prompt_modes import resolve_detection_model
 from i18n import message, exception_message, render
-from resource_safety import MAX_SOURCE_PIXELS
+from resource_safety import MAX_SOURCE_PIXELS, ResourceLimitError
+from sliced_inference import validate_slice_plan
 from ui_language import QFileDialog, QMessageBox, language_for
 
 STATE_TEXT = {"pending": "待审", "accepted": "已接受", "edited": "已修改", "rejected": "已拒绝"}
 STATE_MARK = {"pending": "○", "accepted": "✓", "edited": "✎", "rejected": "✗"}
 STATE_COLOR = {"undetected": "#888888", "accepted": "#2e9e4f", "edited": "#2f6fd0",
                "rejected": "#c0392b", "failed": "#d4801a"}
+# Start of the per-image message for a SAHI plan above the slice cap (the image is skipped).
+SLICE_SKIP_PREFIX = "已跳过（SAHI 切片过多）"
 
 
 class AutoAnnotationWorker(QThread):
@@ -44,6 +47,7 @@ class AutoAnnotationWorker(QThread):
         self.running = True
         self.processed = 0
         self.failed = None
+        self.skipped = []  # indices skipped because their SAHI plan exceeds the slice cap
 
     def run(self):
         total = len(self.jobs)
@@ -71,6 +75,11 @@ class AutoAnnotationWorker(QThread):
                 # Same limit as the engine preflight, applied per file so one
                 # oversized photo is skipped instead of ending the whole batch.
                 self.image_failed.emit(index, message("输入图像超过 1600 万像素，请先缩小图像。"))
+            elif (reason := self._slice_skip_reason(frame)) is not None:
+                # Also a deterministic per-file input check: the 9-slice cap stays, this image is
+                # skipped and reported, and the rest of the folder is still detected.
+                self.skipped.append(index)
+                self.image_failed.emit(index, reason)
             else:
                 try:
                     started = time.perf_counter()
@@ -84,6 +93,18 @@ class AutoAnnotationWorker(QThread):
                                              "sha256": sha256, "elapsed": time.perf_counter() - started, "status": status,
                                              "run_index": self.run_index})
             self.progress.emit(done, total)
+
+    def _slice_skip_reason(self, frame):
+        if not self.options.get("sliced"):
+            return None
+        try:
+            validate_slice_plan(frame.shape, self.options.get("slice_size", 512),
+                                self.options.get("slice_overlap", 0.2), self.options.get("max_slices", 9))
+        except ResourceLimitError as exc:
+            return message("已跳过（SAHI 切片过多）：{error}\n本图未检测，本批其余图片继续。", error=exception_message(exc))
+        except ValueError:
+            return None  # invalid settings: the shared detection path reports them and stops the batch
+        return None
 
     def _fail(self, exc):
         self.failed = f"{type(exc).__name__}: {exc}"
@@ -293,7 +314,8 @@ class AutoAnnotationPanel(QWidget):
     def item_text(self, index):
         entry = self.session.entries[index]
         if entry.error:
-            state, mark = message("失败"), "!"
+            state = message("已跳过（切片过多）" if entry.error.startswith(SLICE_SKIP_PREFIX) else "失败")
+            mark = "!"
         elif entry.state == "pending":
             state = message("待审（已改动）" if entry.modified else "待审" if entry.detected else "未检测")
             mark = STATE_MARK["pending"] if entry.detected or entry.modified else "·"
@@ -575,10 +597,14 @@ class AutoAnnotationPanel(QWidget):
             return
         self.worker = None
         if self.session is not None and self.run_index is not None:
+            skipped = [self.session.entries[index].relative for index in worker.skipped]
             self.session.finish_run(self.run_index, processed=worker.processed, error=worker.failed,
                                     stopped_by_user=not worker.running and worker.failed is None,
-                                    model_sha256=worker.model_sha256)
-            if worker.failed is None:
+                                    model_sha256=worker.model_sha256, skipped_too_many_slices=skipped)
+            if worker.failed is None and skipped:
+                self.notify(message("自动标注结束：本批检测 {count} 张；{skipped} 张因 SAHI 切片超过上限被跳过（列表中标为“已跳过”）。可改用更大的切片或关闭 SAHI 后再次开始；已审核的图片不会被覆盖。",
+                                    count=worker.processed, skipped=len(skipped)))
+            elif worker.failed is None:
                 self.notify(message("自动标注结束：本批检测 {count} 张。请逐张审核，接受或修改后再导出。", count=worker.processed))
         self.run_index = None
         self.update_summary()
