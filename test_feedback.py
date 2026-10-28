@@ -194,6 +194,33 @@ class CanvasTests(unittest.TestCase):
             self.assertTrue(panel.dirty)
             panel.close()
 
+    def test_delete_and_d_shortcuts_but_text_fields_keep_their_own_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            panel = FeedbackPanel(MagicMock(), FeedbackStore(Path(directory)/"data"))
+            panel.show()
+            panel.canvas.set_sample(np.zeros((20, 40, 3), np.uint8), [{"label": "cup", "xyxy": [1, 1, 10, 10]}])
+            panel.canvas.index = 0
+            panel.canvas.setFocus()
+            self.qt_app.processEvents()
+            QTest.keyClick(panel.canvas, Qt.Key_Delete)
+            self.qt_app.processEvents()
+            self.assertEqual(panel.canvas.boxes, [])
+            self.assertEqual(panel.mode.currentIndex(), 0)
+            QTest.keyClick(panel.canvas, Qt.Key_D)
+            self.qt_app.processEvents()
+            self.assertEqual(panel.mode.currentIndex(), 1)
+            self.assertEqual(panel.canvas.mode, "draw")
+            # A text field keeps its own "d" and Delete keys; the shortcuts must not fire.
+            panel.category.setText("cat")
+            panel.category.setCursorPosition(0)
+            panel.category.setFocus()
+            self.qt_app.processEvents()
+            QTest.keyClick(panel.category, Qt.Key_Delete)
+            self.qt_app.processEvents()
+            self.assertEqual(panel.category.text(), "at")
+            self.assertEqual(panel.mode.currentIndex(), 1)  # unchanged: D did not fire either
+            panel.close()
+
     def test_new_second_box_selection_survives_list_rebuild(self):
         with tempfile.TemporaryDirectory() as directory:
             panel = FeedbackPanel(MagicMock(), FeedbackStore(directory))
