@@ -24,6 +24,7 @@ from overlay_labels import place_label
 class CorrectionCanvas(QWidget):
     changed = Signal()
     selected = Signal(int)
+    empty_text = "先检测图片 / 视频 / 摄像头，再点击“纠错当前结果”\n也可以直接打开图片，手动补框"
 
     def __init__(self):
         super().__init__()
@@ -64,7 +65,7 @@ class CorrectionCanvas(QWidget):
         if self.pixmap is None:
             painter.setPen(QColor("white"))
             translator = language_for(self)
-            text = "先检测图片 / 视频 / 摄像头，再点击“纠错当前结果”\n也可以直接打开图片，手动补框"
+            text = self.empty_text
             painter.drawText(self.rect(), Qt.AlignCenter | Qt.TextWordWrap,
                              translator.text(text) if translator else text)
             return
@@ -78,7 +79,7 @@ class CorrectionCanvas(QWidget):
             color = QColor("#ffcc33" if index == self.index else "#50dd88")
             painter.setPen(QPen(color, 2))
             painter.drawRect(drawn)
-            labels.append((drawn, f"{index+1}. {box['label']}", color))
+            labels.append((drawn, self.box_text(index, box), color))
         painter.save()
         painter.setClipRect(rect)
         metrics, padding = painter.fontMetrics(), 3
@@ -103,6 +104,9 @@ class CorrectionCanvas(QWidget):
             p1 = QPointF(rect.x()+self.start.x()*sx, rect.y()+self.start.y()*sy)
             p2 = QPointF(rect.x()+self.current.x()*sx, rect.y()+self.current.y()*sy)
             painter.drawRect(QRectF(p1, p2).normalized())
+
+    def box_text(self, index, box):
+        return f"{index+1}. {box['label']}"
 
     def mousePressEvent(self, event):
         if event.button() != Qt.LeftButton:
