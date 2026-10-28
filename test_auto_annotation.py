@@ -298,6 +298,35 @@ class ExportTests(unittest.TestCase):
         coco = json.loads((export_coco(session, self.root / "out" / "coco")["path"] / "annotations.json").read_text())
         self.assertIn("img0.jpg", [row["file_name"] for row in coco["images"]])
 
+    def test_recursive_yolo_labels_are_where_ultralytics_reads_them(self):
+        source = self.root / "数据集"
+        for relative in ("a.png", "子目录/b.png", "子目录/深/c.png"):
+            write_image(source / relative)
+        session = AnnotationSession(source, recursive=True)
+        for index, entry in enumerate(session.entries):
+            session.set_candidates(index, candidates(), 100, 80, read_image_with_sha(entry.path)[1])
+            session.accept(index)
+        target = export_yolo(session, self.root / "out" / "yolo")["path"]
+        listed = (target / "images.txt").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(listed, ["./images/a.png", "./images/子目录/b.png", "./images/子目录/深/c.png"])
+        try:
+            from ultralytics.data.utils import img2label_paths
+        except ImportError:
+            self.skipTest("ultralytics is not installed")
+        images = [str(target / line[2:]) for line in listed]
+        for label in img2label_paths(images):
+            self.assertTrue(Path(label).is_file(), label)
+        # A subfolder named images would make Ultralytics read images/labels/...: refused, no partial output.
+        write_image(source / "images" / "子目录" / "d.png")
+        session = AnnotationSession(source, recursive=True)
+        nested = next(index for index, entry in enumerate(session.entries) if entry.relative.startswith("images/"))
+        session.set_candidates(nested, candidates(), 100, 80, read_image_with_sha(session.entries[nested].path)[1])
+        session.accept(nested)
+        with self.assertRaisesRegex(ValueError, "images"):
+            export_yolo(session, self.root / "out" / "yolo_nested")
+        self.assertFalse((self.root / "out" / "yolo_nested").exists())
+        self.assertEqual(export_coco(session, self.root / "out" / "coco_nested")["images"], 1)
+
     def test_failed_export_leaves_no_partial_directory(self):
         out = self.root / "out"
         with patch("auto_annotation._copy_image", side_effect=OSError("disk full")):

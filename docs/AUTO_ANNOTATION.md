@@ -43,6 +43,7 @@
 
 - `images/<相对路径>`：已接受 / 已修改图片的副本；复制后校验 SHA-256 与审核时一致，原图不改动。
 - `labels/<相对路径>.txt`：每行 `cls cx cy w h`，先裁剪到图像范围再归一化到 [0, 1]，6 位小数；无框的已接受图写空文件。
+- 递归扫描时子文件夹结构保留在 `images/` 与 `labels/` 下。Ultralytics 把图片路径中**最后一个** `/images/` 换成 `/labels/` 来找标签，所以相对路径中有名为 `images` 的文件夹（例如数据集根目录下的 `images/子目录/x.jpg`）时，标签会被找错位置、图片被当作无目标背景。遇到这种情况 YOLO 导出直接拒绝（COCO 不受影响）；请直接选择那个 `images` 文件夹作为根目录。单元测试用 Ultralytics 的 `img2label_paths` 逐个核对标签路径。
 - `classes.txt`、`images.txt`（`./images/...`）、`data.yaml`（`nc`、`names`）。`train` 与 `val` 指向同一列表，仅为满足 Ultralytics 格式，**不是验证集**，文件内有注释说明。
 
 **COCO**（`auto_labels_coco_*`）

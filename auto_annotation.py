@@ -456,6 +456,11 @@ def export_yolo(session, target, min_score=0.0):
     target, plan = _plan(session, target, min_score)
     labels = {}
     for entry, _ in plan:
+        # Ultralytics finds a label by replacing the LAST "/images/" of the image
+        # path with "/labels/", so images/images/x.jpg would be read from
+        # images/labels/x.txt, a file this export never writes (silent background).
+        if "images" in Path(entry.relative).parts[:-1]:
+            raise ValueError(message("YOLO 导出不支持名为 images 的子文件夹：{name}。Ultralytics 会到别处找它的标签；请直接选择该 images 文件夹，或改用 COCO 导出", name=entry.relative))
         # a.jpg and a.png would both need labels/a.txt (also for Ultralytics).
         key = str(Path(entry.relative).with_suffix(".txt")).casefold()
         if key in labels:

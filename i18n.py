@@ -229,6 +229,7 @@ EN = {
     "导出目录已存在，不覆盖旧导出：{path}": "The export folder already exists; earlier exports are not overwritten: {path}",
     "图片尚未读取，不能导出：{name}": "Image has not been read and cannot be exported: {name}",
     "YOLO 标签文件名冲突：{first} 与 {second} 会写入同一个 .txt": "YOLO label name clash: {first} and {second} would share one .txt file.",
+    "YOLO 导出不支持名为 images 的子文件夹：{name}。Ultralytics 会到别处找它的标签；请直接选择该 images 文件夹，或改用 COCO 导出": "YOLO export does not support a subfolder named images: {name}. Ultralytics would look for its label elsewhere; choose that images folder itself, or export COCO.",
     "没有已接受或已修改的图片可导出；待审和已拒绝的图片不会导出": "No accepted or edited images to export; pending and rejected images are never exported.",
     "视觉提示词（参考目标）": "Visual prompt (reference object)",
     "上传参考图片": "Upload reference image",
