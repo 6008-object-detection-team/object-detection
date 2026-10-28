@@ -211,6 +211,11 @@ def build_ui(app):
     stop = QPushButton("关闭检测"); stop.clicked.connect(app.stop_video_stream)
     controls.addWidget(QLabel("检测任意目标:")); controls.addWidget(app.prompt_input); controls.addWidget(start); controls.addWidget(stop)
     correct = QPushButton("纠错当前结果"); correct.clicked.connect(app.open_feedback); controls.addWidget(correct)
+    from compare_ui import open_compare_dialog
+    compare = QPushButton("对比模型…")
+    compare.setToolTip("在当前图片上串行加载并比较两个选定模型（一次只占用一个模型），结果可导出为 PNG。")
+    compare.clicked.connect(lambda: open_compare_dialog(app))
+    controls.addWidget(compare)
     app.prompt_mode_hint = QLabel("留空：真正无提示检测；输入文字：指定目标。切换权重前会停止检测，只加载一个模型。")
     app.prompt_mode_hint.setWordWrap(True)
     app.video_label_tab1 = _video_label(); text_layout.addLayout(controls)
