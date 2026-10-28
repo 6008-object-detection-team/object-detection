@@ -203,6 +203,7 @@ EN = {
     "共 {total} 张 | 已检测 {detected} | 待审 {pending} | 已接受 {accepted} | 已修改 {edited} | 已拒绝 {rejected} | 失败 {failed} | 可导出 {exportable} 张 / {boxes} 框": "{total} images | detected {detected} | pending {pending} | accepted {accepted} | edited {edited} | rejected {rejected} | failed {failed} | exportable {exportable} images / {boxes} boxes",
     "未导出的标注": "Unexported labels",
     "自动标注页有尚未导出的人工审核结果，继续将丢失这些结果。是否继续？": "The Auto-labeling page has human review results that were not exported. Continuing discards them. Continue?",
+    "自动标注页有 {count} 张图片的检测候选尚未审核，继续将丢失这些候选，需要重新检测。是否继续？": "The Auto-labeling page has unreviewed detection candidates for {count} images. Continuing discards them, and the images must be detected again. Continue?",
     "读取文件夹失败：{error}": "Could not read the folder: {error}",
     "所选文件夹中没有 JPG、JPEG、PNG 或 BMP 图片。": "The selected folder contains no JPG, JPEG, PNG or BMP images.",
     "已载入 {count} 张图片。点击“开始自动标注”生成候选框。": "Loaded {count} images. Click Start auto-labeling to generate candidate boxes.",

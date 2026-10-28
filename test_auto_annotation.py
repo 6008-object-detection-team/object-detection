@@ -546,8 +546,7 @@ class AutoAnnotationTabTests(unittest.TestCase):
     def tearDown(self):
         self.window.worker = None
         self.panel.worker = None
-        if self.panel.session is not None:
-            self.panel.session.dirty = False
+        self.panel.session = None  # closing must not ask about unexported results
         self.window.close()
         self.window.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
@@ -774,6 +773,31 @@ class AutoAnnotationTabTests(unittest.TestCase):
             self.assertFalse(panel.may_discard())
         self.assertEqual(question.call_count, 2)
         self.assertEqual(panel.session.entries[0].state, "accepted")
+
+    def test_subfolder_toggle_asks_before_dropping_unreviewed_detections(self):
+        panel = self.panel
+        write_image(self.folder / "子目录" / "图9.png")
+        panel.load_folder(self.folder)
+        self.simulate_detection(0)
+        self.simulate_detection(1)
+        self.assertFalse(panel.session.dirty)
+        session = panel.session
+        with patch("auto_annotation_ui.QMessageBox.question", return_value=QtMessageBox.No) as question:
+            panel.recursive.setChecked(True)
+        question.assert_called_once()
+        self.assertIn("2", str(question.call_args.args[2]))
+        self.assertFalse(panel.recursive.isChecked())
+        self.assertIs(panel.session, session)
+        self.assertEqual(panel.session.counts()["detected"], 2)
+        with patch("auto_annotation_ui.QMessageBox.question", return_value=QtMessageBox.Yes):
+            panel.recursive.setChecked(True)
+        self.assertEqual(len(panel.session), 4)
+        self.assertEqual(panel.session.counts()["detected"], 0)
+        # Nothing detected or reviewed: no question.
+        with patch("auto_annotation_ui.QMessageBox.question") as question:
+            panel.recursive.setChecked(False)
+        question.assert_not_called()
+        self.assertEqual(len(panel.session), 3)
 
 
 if __name__ == "__main__":

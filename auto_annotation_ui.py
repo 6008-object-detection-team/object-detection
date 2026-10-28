@@ -367,9 +367,17 @@ class AutoAnnotationPanel(QWidget):
             self.rebuild_boxes()
 
     def may_discard(self):
-        if self.session is None or not self.session.dirty:
+        """Ask before dropping unexported review or unreviewed detection results."""
+        if self.session is None:
             return True
-        return QMessageBox.question(self, "未导出的标注", "自动标注页有尚未导出的人工审核结果，继续将丢失这些结果。是否继续？") == QMessageBox.Yes
+        if self.session.dirty:
+            return QMessageBox.question(self, "未导出的标注", "自动标注页有尚未导出的人工审核结果，继续将丢失这些结果。是否继续？") == QMessageBox.Yes
+        unreviewed = sum(entry.detected and entry.state == "pending" for entry in self.session.entries)
+        if unreviewed:
+            return QMessageBox.question(self, "未导出的标注", message(
+                "自动标注页有 {count} 张图片的检测候选尚未审核，继续将丢失这些候选，需要重新检测。是否继续？",
+                count=unreviewed)) == QMessageBox.Yes
+        return True
 
     def load_folder(self, folder):
         if self.running or not self.may_discard():
