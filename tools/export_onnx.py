@@ -41,7 +41,8 @@ MIN_EXPORT_DISK_MB = 1024
 LIMITATIONS = [
     "Vocabulary is fixed at export: the ONNX graph has no text encoder, so text or visual prompts cannot change classes.",
     "Raw one-to-many output (xywh + class scores [+ 32 mask coefficients]); NMS runs outside the graph.",
-    "Static batch 1 and a square imgsz x imgsz input; the PyTorch app path uses a minimal rectangular letterbox instead.",
+    "Batch fixed to 1. Default graphs take a square imgsz x imgsz input, while the PyTorch app path uses a minimal "
+    "rectangular letterbox; --dynamic-hw keeps height/width dynamic to use that same rectangle.",
     "Only CPUExecutionProvider was checked; onnxruntime-gpu/TensorRT are not part of this environment.",
     "Prompt-free (LRPC, 4585-class) checkpoints are not exported by this tool.",
 ]
@@ -79,6 +80,8 @@ def build_parser():
                         help="seg：完整分割图（含 mask 原型输出）；det：仅检测分支转换")
     parser.add_argument("--imgsz", type=positive_integer, default=640)
     parser.add_argument("--opset", type=positive_integer, default=17)
+    parser.add_argument("--dynamic-hw", action="store_true",
+                        help="高宽动态（batch 仍固定为 1），与 PyTorch 应用路径相同的最小矩形 letterbox")
     parser.add_argument("--threads", type=positive_integer, default=2)
     parser.add_argument("--output-dir", type=Path, default=Path("work/onnx_export"))
     parser.add_argument("--plan", action="store_true", help="只验证参数并输出计划，不加载模型")
@@ -107,11 +110,11 @@ def resolve_classes(args):
                            "references_sha256": sha256_file(references)}
 
 
-def output_stem(model, variant, class_set, imgsz):
+def output_stem(model, variant, class_set, imgsz, dynamic_hw=False):
     stem = Path(model).stem
     if variant == "det":
         stem = stem[:-4] + "-det" if stem.endswith("-seg") else stem + "-det"
-    return f"{stem}-{class_set}-{imgsz}"
+    return f"{stem}-{class_set}-{imgsz}" + ("-dyn" if dynamic_hw else "")
 
 
 def plan_export(args):
@@ -133,14 +136,15 @@ def plan_export(args):
     output = project_path(args.output_dir).resolve()
     targets = {}
     for variant in args.variants:
-        stem = output_stem(model, variant, class_source["class_set"], args.imgsz)
+        stem = output_stem(model, variant, class_source["class_set"], args.imgsz, args.dynamic_hw)
         onnx_file = output / f"{stem}.onnx"
         for path in (onnx_file, manifest_path(onnx_file)):
             if path.exists():
                 raise ValueError(f"输出已存在，不覆盖旧文件或 manifest：{path}")
         targets[variant] = str(onnx_file)
     return {"model": str(model), "classes": classes, "class_source": class_source, "variants": list(args.variants),
-            "imgsz": args.imgsz, "opset": args.opset, "threads": args.threads, "output_dir": str(output),
+            "imgsz": args.imgsz, "opset": args.opset, "dynamic_hw": args.dynamic_hw, "threads": args.threads,
+            "output_dir": str(output),
             "targets": targets}
 
 
@@ -222,8 +226,18 @@ def build_detection_model(model_path, classes, embeddings, source_state):
     return model, transfer
 
 
-def onnx_check(path, classes, imgsz, threads):
-    """Structural check, then one CPU ORT run on a constant letterbox-gray input."""
+def fix_batch_dimension(path):
+    """Ultralytics' dynamic export also frees the batch axis; declare batch = 1 again."""
+    import onnx
+    graph = onnx.load(str(path))
+    for value in list(graph.graph.input) + list(graph.graph.output):
+        value.type.tensor_type.shape.dim[0].dim_value = 1
+    onnx.checker.check_model(graph)
+    onnx.save(graph, str(path))
+
+
+def onnx_check(path, classes, imgsz, threads, dynamic_hw=False):
+    """Structural check, then CPU ORT runs on constant letterbox-gray inputs."""
     import numpy as np
     import onnx
     import onnxruntime as ort
@@ -238,19 +252,27 @@ def onnx_check(path, classes, imgsz, threads):
     session = ort.InferenceSession(str(path), sess_options=options, providers=["CPUExecutionProvider"])
     inputs = [{"name": item.name, "shape": list(item.shape), "dtype": item.type} for item in session.get_inputs()]
     outputs = [{"name": item.name, "shape": list(item.shape), "dtype": item.type} for item in session.get_outputs()]
-    if len(inputs) != 1 or inputs[0]["shape"] != [1, 3, imgsz, imgsz]:
-        raise ValueError(f"ONNX 输入不是静态 [1, 3, {imgsz}, {imgsz}]：{inputs}")
-    values = session.run(None, {inputs[0]["name"]: np.full((1, 3, imgsz, imgsz), 114 / 255, np.float32)})
-    if not all(np.isfinite(value).all() for value in values):
-        raise ValueError("ONNX Runtime 输出包含非有限值")
-    shape = values[0].shape
+    shape = inputs[0]["shape"] if len(inputs) == 1 else []
+    if shape[:2] != [1, 3] or len(shape) != 4 or (
+            any(isinstance(value, int) for value in shape[2:]) if dynamic_hw else shape[2:] != [imgsz, imgsz]):
+        raise ValueError(f"ONNX 输入形状不符合 batch=1、{'动态高宽' if dynamic_hw else '静态方形'}：{inputs}")
+    sizes = [(imgsz, imgsz)] + ([(imgsz * 3 // 4 // 32 * 32, imgsz)] if dynamic_hw else [])
+    shapes = []
+    for height, width in sizes:
+        values = session.run(None, {inputs[0]["name"]: np.full((1, 3, height, width), 114 / 255, np.float32)})
+        if not all(np.isfinite(value).all() for value in values):
+            raise ValueError("ONNX Runtime 输出包含非有限值")
+        shapes.append(values[0].shape)
+    shape = shapes[0]  # The square imgsz x imgsz input.
     extra = shape[1] - 4 - len(classes)
     if len(shape) != 3 or shape[0] != 1 or extra < 0:
         raise ValueError(f"ONNX 主输出形状与固定类别不一致：{shape}")
     return {"opset_import": opsets, "ir_version": ir_version, "inputs": inputs, "outputs": outputs,
             "providers": session.get_providers(), "constant_input_outputs_finite": True,
+            "checked_input_hw": [list(size) for size in sizes],
             "output_layout": {"format": OUTPUT_FORMAT, "box": "xywh in letterboxed input pixels",
-                              "num_classes": len(classes), "extra_channels": int(extra), "anchors": int(shape[2])}}
+                              "num_classes": len(classes), "extra_channels": int(extra),
+                              "anchors_at_square_input": int(shape[2]), "anchors_dynamic": bool(dynamic_hw)}}
 
 
 def export_variant(model, variant, plan, staging, prompt, source_record, encoder_record, transfer=None):
@@ -259,12 +281,15 @@ def export_variant(model, variant, plan, staging, prompt, source_record, encoder
     # Ultralytics writes next to pt_path; point it at the private staging folder.
     model.model.pt_path = str(staged.with_suffix(".pt"))
     start = time.perf_counter()
+    dynamic = plan.get("dynamic_hw", False)
     exported = Path(model.export(format="onnx", imgsz=plan["imgsz"], opset=plan["opset"], simplify=True,
-                                 dynamic=False, batch=1, device="cpu", verbose=False))
+                                 dynamic=dynamic, batch=1, device="cpu", verbose=False))
     seconds = time.perf_counter() - start
     if exported.resolve() != staged.resolve() or not staged.is_file():
         raise RuntimeError(f"Ultralytics 输出路径异常：{exported}")
-    check = onnx_check(staged, plan["classes"], plan["imgsz"], plan["threads"])
+    if dynamic:
+        fix_batch_dimension(staged)
+    check = onnx_check(staged, plan["classes"], plan["imgsz"], plan["threads"], dynamic)
     expected_extra = 32 if variant == "seg" else 0
     if check["output_layout"]["extra_channels"] != expected_extra:
         raise ValueError(f"{variant} 输出附加通道应为 {expected_extra}，实际 {check['output_layout']['extra_channels']}")
@@ -280,12 +305,15 @@ def export_variant(model, variant, plan, staging, prompt, source_record, encoder
         "source_model": source_record, "text_encoder": encoder_record,
         "classes": list(plan["classes"]), "class_source": plan["class_source"],
         "prompt_embeddings": prompt,
-        "export": {"format": "onnx", "imgsz": plan["imgsz"], "opset": plan["opset"], "batch": 1, "dynamic": False,
+        "export": {"format": "onnx", "imgsz": plan["imgsz"], "opset": plan["opset"], "batch": 1,
+                   "dynamic": "height,width" if dynamic else False, "dynamic_hw": dynamic,
+                   "stride": int(max(model.model.stride)),
                    "simplify": "onnxslim", "nms": None, "end2end": False, "head": "one2many", "precision": "fp32",
                    "device": "cpu", "seconds": seconds},
         "io": {"inputs": check["inputs"], "outputs": check["outputs"]},
         "output_layout": check["output_layout"],
-        "preprocess": {"letterbox": "square, centered", "padding_value": 114, "interpolation": "cv2.INTER_LINEAR",
+        "preprocess": {"letterbox": "minimal stride-aligned rectangle, centered (Ultralytics auto)" if dynamic
+                       else "square, centered", "padding_value": 114, "interpolation": "cv2.INTER_LINEAR",
                        "color": "BGR->RGB", "scale": "1/255", "layout": "NCHW float32"},
         "postprocess": {"nms": "outside graph, Ultralytics-compatible greedy NMS (onnx_engine.py)"},
         "onnx_check": {key: check[key] for key in ("opset_import", "ir_version", "providers",

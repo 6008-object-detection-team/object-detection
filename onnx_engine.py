@@ -2,9 +2,11 @@
 
 Experimental tool backend: the GUI detection path does not use it. Neither
 importing this module nor inference imports torch. Pre/post-processing follows
-Ultralytics 8.4.172 for a static square input (letterbox, xywh -> xyxy, best
-class, greedy NMS, scale back, clip) in NumPy. Only CPUExecutionProvider is
-supported here; another provider is refused instead of silently using CPU.
+Ultralytics 8.4.172 (letterbox, xywh -> xyxy, best class, greedy NMS, scale
+back, clip) in NumPy: a square input for static graphs, or the minimal
+stride-aligned rectangle of the PyTorch app path for graphs exported with
+dynamic height/width. Only CPUExecutionProvider is supported here; another
+provider is refused instead of silently using CPU.
 """
 import hashlib
 import json
@@ -51,6 +53,9 @@ def validate_manifest(manifest):
     imgsz = manifest.get("export", {}).get("imgsz")
     if isinstance(imgsz, bool) or not isinstance(imgsz, int) or not 32 <= imgsz <= 960 or imgsz % 32:
         raise ValueError("ONNX manifest 的输入尺寸必须是 32–960 之间 32 的倍数")
+    if not isinstance(manifest["export"].get("dynamic_hw", False), bool) \
+            or manifest["export"].get("stride", 32) not in (8, 16, 32, 64):
+        raise ValueError("ONNX manifest 的动态尺寸或步长无效")
     layout = manifest.get("output_layout", {})
     if layout.get("format") != OUTPUT_FORMAT or layout.get("num_classes") != len(classes) \
             or not isinstance(layout.get("extra_channels"), int) or layout["extra_channels"] < 0:
@@ -71,12 +76,15 @@ def read_manifest(onnx_path, verify_hash=True):
     return manifest
 
 
-def letterbox(frame, size, padding_value=PADDING_VALUE):
-    """Ultralytics LetterBox(auto=False, center=True, scaleup=True) for a square input."""
+def letterbox(frame, size, padding_value=PADDING_VALUE, auto=False, stride=32):
+    """Ultralytics LetterBox(center=True, scaleup=True); auto=True pads only to the stride."""
     height, width = frame.shape[:2]
     ratio = min(size / height, size / width)
     unpadded = round(width * ratio), round(height * ratio)
-    dw, dh = (size - unpadded[0]) / 2, (size - unpadded[1]) / 2
+    dw, dh = size - unpadded[0], size - unpadded[1]
+    if auto:
+        dw, dh = dw % stride, dh % stride
+    dw, dh = dw / 2, dh / 2
     image = frame if (width, height) == unpadded else cv2.resize(frame, unpadded, interpolation=cv2.INTER_LINEAR)
     top, bottom = round(dh - 0.1), round(dh + 0.1)
     left, right = round(dw - 0.1), round(dw + 0.1)
@@ -136,12 +144,13 @@ def decode_predictions(output, num_classes, conf, iou, max_det, agnostic=True):
     return np.concatenate([boxes[keep], scores[keep, None], class_ids[keep, None].astype(np.float32)], 1)
 
 
-def scale_boxes(boxes, input_size, frame_shape):
-    """Ultralytics scale_boxes + clip from the square letterbox to the frame."""
+def scale_boxes(boxes, input_shape, frame_shape):
+    """Ultralytics scale_boxes + clip from the (height, width) letterbox to the frame."""
+    input_height, input_width = input_shape[:2]
     height, width = frame_shape[:2]
-    gain = min(input_size / height, input_size / width)
-    pad_x = round((input_size - round(width * gain)) / 2 - 0.1)
-    pad_y = round((input_size - round(height * gain)) / 2 - 0.1)
+    gain = min(input_height / height, input_width / width)
+    pad_x = round((input_width - round(width * gain)) / 2 - 0.1)
+    pad_y = round((input_height - round(height * gain)) / 2 - 0.1)
     boxes = boxes.copy()
     boxes[:, [0, 2]] = np.clip((boxes[:, [0, 2]] - pad_x) / gain, 0, width)
     boxes[:, [1, 3]] = np.clip((boxes[:, [1, 3]] - pad_y) / gain, 0, height)
@@ -163,6 +172,7 @@ class OnnxRuntimeEngine(OpenVocabEngine):
         self.providers = []
         self.last_timing = {}
         self._input_name = self._output_name = None
+        self._dynamic_hw, self._stride = False, 32
 
     def set_inference_options(self, *, agnostic_nms=None, head_mode=None, quantize=None):
         if head_mode not in (None, "one2many"):
@@ -201,13 +211,17 @@ class OnnxRuntimeEngine(OpenVocabEngine):
                 raise RuntimeError("ONNX Runtime 没有启用所请求的 CPUExecutionProvider")
             inputs, outputs = session.get_inputs(), session.get_outputs()
             size = manifest["export"]["imgsz"]
+            dynamic = manifest["export"].get("dynamic_hw", False)
             channels = 4 + len(manifest["classes"]) + manifest["output_layout"]["extra_channels"]
-            if len(inputs) != 1 or list(inputs[0].shape) != [1, 3, size, size] \
-                    or not outputs or len(outputs[0].shape) != 3 or outputs[0].shape[1] != channels:
+            shape = list(inputs[0].shape) if len(inputs) == 1 else []
+            expected = shape[:2] == [1, 3] and len(shape) == 4 and (
+                all(not isinstance(value, int) for value in shape[2:]) if dynamic else shape[2:] == [size, size])
+            if not expected or not outputs or len(outputs[0].shape) != 3 or outputs[0].shape[1] != channels:
                 raise ValueError("ONNX 输入/输出形状与 manifest 不一致")
             self.session, self.manifest, self.providers = session, manifest, session.get_providers()
             self._input_name, self._output_name = inputs[0].name, outputs[0].name
             self.imgsz = size
+            self._dynamic_hw, self._stride = dynamic, manifest["export"].get("stride", 32)
             self.current_classes = list(manifest["classes"])
             self.model = path  # Marks the engine loaded for the shared pipeline.
             return "SUCCESS"
@@ -239,13 +253,14 @@ class OnnxRuntimeEngine(OpenVocabEngine):
     def _predict_boxes(self, frame, conf, iou, source, max_det):
         clock = time.perf_counter
         start = clock()
-        blob = to_blob(letterbox(frame, self.imgsz))
+        image = letterbox(frame, self.imgsz, auto=self._dynamic_hw, stride=self._stride)
+        blob = to_blob(image)
         prepared = clock()
         output = self.session.run([self._output_name], {self._input_name: blob})[0]
         inferred = clock()
         rows = decode_predictions(output[0], len(self.current_classes), conf, iou, max_det,
                                   agnostic=self._inference_options["agnostic_nms"])
-        rows[:, :4] = scale_boxes(rows[:, :4], self.imgsz, frame.shape)
+        rows[:, :4] = scale_boxes(rows[:, :4], image.shape, frame.shape)
         detections = []
         for x1, y1, x2, y2, score, class_id in rows:
             if x2 <= x1 or y2 <= y1 or not math.isfinite(score):

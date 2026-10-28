@@ -309,6 +309,7 @@ EN = {
     "ONNX manifest 的类别必须是非空且不重复的名称列表": "ONNX manifest classes must be a nonempty list of unique names.",
     "ONNX manifest 的输入尺寸必须是 32–960 之间 32 的倍数": "ONNX manifest input size must be a multiple of 32 from 32 to 960.",
     "ONNX manifest 的输出布局与固定类别不一致": "ONNX manifest output layout does not match the fixed classes.",
+    "ONNX manifest 的动态尺寸或步长无效": "Invalid dynamic-size or stride entry in the ONNX manifest.",
     "缺少 ONNX 文件或同名 manifest：{path}": "Missing ONNX file or its manifest: {path}",
     "manifest 记录的文件名与 ONNX 文件不一致": "The manifest file name does not match the ONNX file.",
     "ONNX 文件哈希与 manifest 不一致；拒绝加载": "ONNX file hash does not match its manifest. Loading refused.",

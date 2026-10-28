@@ -91,12 +91,14 @@ class ManifestTests(unittest.TestCase):
             plan = {"targets": {"seg": str(target)}, "imgsz": 640, "opset": 17, "threads": 2,
                     "classes": ["bottle", "cup", "cell phone"], "class_source": {"class_set": "mini_eval"}}
             model = MagicMock()
+            model.model.stride = [8, 16, 32]
 
             def fake_export(**kwargs):
                 staged = Path(model.model.pt_path).with_suffix(".onnx")
                 staged.write_bytes(b"graph-bytes")
                 self.assertEqual((kwargs["format"], kwargs["opset"], kwargs["dynamic"], kwargs["batch"],
-                                  kwargs["simplify"], kwargs["device"]), ("onnx", 17, False, 1, True, "cpu"))
+                                  kwargs["simplify"], kwargs["device"]), ("onnx", 17, plan.get("dynamic_hw", False),
+                                                                          1, True, "cpu"))
                 self.assertNotIn("nms", kwargs)  # Default None: raw one2many output, NMS outside.
                 return str(staged)
 
@@ -106,7 +108,7 @@ class ManifestTests(unittest.TestCase):
                      "inputs": [{"name": "images", "shape": [1, 3, 640, 640], "dtype": "tensor(float)"}],
                      "outputs": [{"name": "output0", "shape": [1, 39, 8400], "dtype": "tensor(float)"}],
                      "output_layout": {"format": "raw_one2many_xywh", "box": "xywh", "num_classes": 3,
-                                       "extra_channels": 32, "anchors": 8400}}
+                                       "extra_channels": 32, "anchors_at_square_input": 8400, "anchors_dynamic": False}}
             source = {"path": "yoloe-26s-seg.pt", "sha256": "b" * 64, "bytes": 1}
             with patch.object(export, "onnx_check", return_value=check):
                 manifest = export.export_variant(model, "seg", plan, staging, {"sha256": "c" * 64}, source,
@@ -119,7 +121,8 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual(saved["classes"], ["bottle", "cup", "cell phone"])
             self.assertEqual(saved["source_model"]["sha256"], "b" * 64)
             self.assertEqual((saved["export"]["opset"], saved["export"]["imgsz"], saved["export"]["batch"],
-                              saved["export"]["dynamic"], saved["export"]["nms"]), (17, 640, 1, False, None))
+                              saved["export"]["dynamic"], saved["export"]["nms"], saved["export"]["stride"]),
+                             (17, 640, 1, False, None, 32))
             for package in ("torch", "ultralytics", "onnx", "onnxruntime"):
                 self.assertIn(package, saved["versions"])
             self.assertIn("tools/export_onnx.py", saved["source_hashes"])
@@ -130,6 +133,16 @@ class ManifestTests(unittest.TestCase):
                     check["output_layout"], extra_channels=0))), self.assertRaisesRegex(ValueError, "附加通道"):
                 export.export_variant(model, "seg", dict(plan, targets={"seg": str(folder / "other.onnx")}),
                                       staging, {}, source, {})
+            # Dynamic height/width: batch is re-fixed to 1 and the manifest selects the rectangle letterbox.
+            plan.update(dynamic_hw=True, targets={"det": str(folder / "out" / "yoloe-26s-det-mini_eval-640-dyn.onnx")})
+            dynamic_check = dict(check, output_layout=dict(check["output_layout"], extra_channels=0))
+            with patch.object(export, "onnx_check", return_value=dynamic_check) as checked, \
+                    patch.object(export, "fix_batch_dimension") as fixed:
+                dynamic = export.export_variant(model, "det", plan, staging, {}, source, {})
+            fixed.assert_called_once()
+            self.assertTrue(checked.call_args.args[-1])
+            self.assertEqual((dynamic["export"]["dynamic"], dynamic["export"]["dynamic_hw"]), ("height,width", True))
+            self.assertIn("rectangle", dynamic["preprocess"]["letterbox"])
 
 
 class ExportArgumentTests(unittest.TestCase):
@@ -149,6 +162,9 @@ class ExportArgumentTests(unittest.TestCase):
             self.assertEqual(plan["classes"], ["bottle", "cup", "cell phone"])
             self.assertEqual(sorted(Path(path).name for path in plan["targets"].values()),
                              ["yoloe-26s-det-mini_eval-640.onnx", "yoloe-26s-seg-mini_eval-640.onnx"])
+            dynamic = export.plan_export(export_args(folder, "--variants", "det", "--dynamic-hw"))
+            self.assertEqual(Path(dynamic["targets"]["det"]).name, "yoloe-26s-det-mini_eval-640-dyn.onnx")
+            self.assertTrue(dynamic["dynamic_hw"])
             coco = export.plan_export(export_args(folder, "--class-set", "coco10", "--variants", "seg"))
             self.assertEqual(coco["classes"][:3], ["person", "bicycle", "car"])
             self.assertEqual(len(coco["classes"]), 10)
@@ -253,15 +269,22 @@ class BenchmarkArgumentTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "变体"):
                 bench.validate_inputs(self.parse("--backends", "pt_cpu_square,ort_cpu_det", "--onnx-det", str(path)),
                                       self.dataset)
+        with tempfile.TemporaryDirectory() as folder:
+            path, _ = write_onnx_pair(folder, classes=["bottle", "cup", "cell phone"], variant="det",
+                                      output_layout={"format": "raw_one2many_xywh", "num_classes": 3, "extra_channels": 0})
+            with self.assertRaisesRegex(ValueError, "动态尺寸"):  # A square graph is not the rectangle backend.
+                bench.validate_inputs(self.parse("--backends", "pt_cpu_square,ort_cpu_det_rect",
+                                                 "--onnx-det-rect", str(path)), self.dataset)
 
     def test_worker_command_and_environment_pin_threads_and_disable_installs(self):
-        args = self.parse("--onnx-seg", "a.onnx", "--threads", "3", "--limit", "2")
+        args = self.parse("--onnx-seg", "a.onnx", "--onnx-det-rect", "b.onnx", "--threads", "3", "--limit", "2")
         command = bench.worker_command(args, "ort_cpu_seg", Path("out.json"))
         self.assertEqual(command[command.index("--worker") + 1], "ort_cpu_seg")
         self.assertEqual(command[command.index("--threads") + 1], "3")
         self.assertEqual(command[command.index("--limit") + 1], "2")
         self.assertTrue(command[command.index("--onnx-seg") + 1].endswith("a.onnx"))
         self.assertNotIn("--onnx-det", command)
+        self.assertTrue(command[command.index("--onnx-det-rect") + 1].endswith("b.onnx"))
         environment = bench.worker_environment(3)
         self.assertEqual([environment[name] for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS")], ["3", "3"])
         self.assertEqual(environment["YOLO_AUTOINSTALL"], "False")
@@ -401,7 +424,7 @@ class OnnxEngineMathTests(unittest.TestCase):
 
     def test_scale_boxes_inverts_letterbox_and_clips(self):
         boxes = np.array([[100, 80 + 100, 200, 80 + 200], [-5, 0, 700, 700]], np.float32)
-        scaled = scale_boxes(boxes, 640, (480, 640))
+        scaled = scale_boxes(boxes, (640, 640), (480, 640))
         np.testing.assert_allclose(scaled[0], [100, 100, 200, 200])
         np.testing.assert_allclose(scaled[1], [0, 0, 640, 480])
 
@@ -416,6 +439,11 @@ class OnnxEngineMathTests(unittest.TestCase):
             frame = generator.integers(0, 255, (*shape, 3), dtype=np.uint8)
             expected = LetterBox((640, 640), auto=False, stride=32)(image=frame)
             np.testing.assert_array_equal(letterbox(frame, 640), expected)
+            rect = LetterBox((640, 640), auto=True, stride=32)(image=frame)
+            np.testing.assert_array_equal(letterbox(frame, 640, auto=True, stride=32), rect)
+            boxes = np.array([[10, 20, 200, 300], [0, 0, 5, 5]], np.float32)
+            reference = ops.scale_boxes(rect.shape[:2], torch.from_numpy(boxes.copy()), shape)
+            np.testing.assert_allclose(scale_boxes(boxes, rect.shape, shape), reference.numpy(), rtol=0, atol=1e-3)
         for agnostic in (True, False):
             raw = np.zeros((1, 4 + 3 + 32, 2000), np.float32)
             raw[0, :2] = generator.uniform(0, 640, (2, 2000))
@@ -425,7 +453,7 @@ class OnnxEngineMathTests(unittest.TestCase):
             mine = decode_predictions(raw[0], 3, 0.05, 0.5, 100, agnostic=agnostic)
             theirs = non_max_suppression(torch.from_numpy(raw), 0.05, 0.5, agnostic=agnostic, max_det=100, nc=3)[0]
             np.testing.assert_allclose(mine, theirs[:, :6].numpy(), rtol=0, atol=1e-4)
-            scaled = scale_boxes(mine[:, :4], 640, (427, 640))
+            scaled = scale_boxes(mine[:, :4], (640, 640), (427, 640))
             reference = ops.scale_boxes((640, 640), torch.from_numpy(mine[:, :4].copy()), (427, 640))
             np.testing.assert_allclose(scaled, reference.numpy(), rtol=0, atol=1e-3)
 
@@ -522,6 +550,45 @@ class OnnxEngineTests(unittest.TestCase):
             self.assertEqual(len(detections), 1)
             self.assertEqual((detections[0].label, detections[0].xyxy), ("bottle", (24.0, 24.0, 40.0, 40.0)))
             engine.unload()
+
+
+    @unittest.skipUnless(importlib.util.find_spec("onnxruntime") and importlib.util.find_spec("onnx"),
+                         "onnx/onnxruntime 未安装")
+    def test_dynamic_height_width_graph_receives_the_app_rectangle(self):
+        import onnx
+        from onnx import TensorProto, helper
+        # Output anchors depend on the input width, so a square input would give a different shape.
+        nodes = [helper.make_node("ReduceMean", ["images"], ["rows"], keepdims=1, axes=[1, 2]),  # 1x1x1xW
+                 helper.make_node("Reshape", ["rows", "shape"], ["row"]),  # 1x1xW
+                 helper.make_node("Mul", ["row", "zero"], ["zeros"]),
+                 helper.make_node("Add", ["zeros", "base"], ["output0"])]  # broadcast to 1x6xW
+        graph = helper.make_graph(
+            nodes, "toy_dynamic",
+            [helper.make_tensor_value_info("images", TensorProto.FLOAT, [1, 3, "height", "width"])],
+            [helper.make_tensor_value_info("output0", TensorProto.FLOAT, [1, 6, "anchors"])],
+            [helper.make_tensor("shape", TensorProto.INT64, [3], [1, 1, -1]),
+             helper.make_tensor("zero", TensorProto.FLOAT, [1], [0.0]),
+             helper.make_tensor("base", TensorProto.FLOAT, [1, 6, 1], [32, 32, 16, 16, 0.9, 0.0])])
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+        model.ir_version = 8
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "m.onnx"
+            onnx.save(model, str(path))
+            manifest = valid_manifest(extra=0, digest=hashlib.sha256(path.read_bytes()).hexdigest())
+            manifest["export"].update(imgsz=128, dynamic_hw=True, stride=32)
+            manifest_path(path).write_text(json.dumps(manifest), encoding="utf-8")
+            engine = OnnxRuntimeEngine()
+            self.assertEqual(engine.load_model(path, "CPU", threads=1), "SUCCESS")
+            run = engine.session.run
+            with patch.object(engine.session, "run", side_effect=run) as spy:
+                detections = engine.detect(np.zeros((64, 128, 3), np.uint8), conf=0.25, class_names=None)
+            self.assertEqual(spy.call_args.args[1]["images"].shape, (1, 3, 64, 128))
+            # All 128 anchors carry the same box; NMS keeps one in frame coordinates (no padding here).
+            self.assertEqual([(item.label, item.xyxy) for item in detections], [("bottle", (24.0, 24.0, 40.0, 40.0))])
+            engine.unload()
+            manifest["export"]["dynamic_hw"] = False  # A dynamic graph cannot be described as square.
+            manifest_path(path).write_text(json.dumps(manifest), encoding="utf-8")
+            self.assertIn("形状", engine.load_model(path, "CPU", threads=1))
 
 
 class OnnxCatalogTests(unittest.TestCase):

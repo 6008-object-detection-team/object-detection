@@ -35,14 +35,18 @@ BACKENDS = {
                       "note": "Same app path, but the static ONNX square letterbox; main PyTorch reference."},
     "pt_cpu_det_square": {"runtime": "pytorch", "device": "CPU", "letterbox": "square", "graph": "det",
                           "note": "PyTorch detection-branch-only conversion with the square letterbox."},
-    "ort_cpu_seg": {"runtime": "onnxruntime", "device": "CPU", "letterbox": "square", "graph": "seg",
+    "ort_cpu_seg": {"runtime": "onnxruntime", "device": "CPU", "letterbox": "square", "graph": "seg", "onnx": "seg",
                     "note": "ONNX full segmentation graph; mask prototypes computed, ignored."},
-    "ort_cpu_det": {"runtime": "onnxruntime", "device": "CPU", "letterbox": "square", "graph": "det",
+    "ort_cpu_det": {"runtime": "onnxruntime", "device": "CPU", "letterbox": "square", "graph": "det", "onnx": "det",
                     "note": "ONNX detection-branch-only graph."},
+    "ort_cpu_det_rect": {"runtime": "onnxruntime", "device": "CPU", "letterbox": "rect", "graph": "det",
+                         "onnx": "det_rect",
+                         "note": "ONNX detection-branch-only graph with dynamic height/width (app-path rectangle)."},
     "pt_cuda_rect": {"runtime": "pytorch", "device": "CUDA", "letterbox": "rect", "graph": "seg",
                      "note": "Reference only: app path on CUDA under the 3 GiB budget and GPU lock."},
 }
 DEFAULT_BACKENDS = ["pt_cpu_rect", "pt_cpu_square", "pt_cpu_det_square", "ort_cpu_seg", "ort_cpu_det"]
+ONNX_INPUTS = {"seg": ("seg", False), "det": ("det", False), "det_rect": ("det", True)}  # graph, dynamic H/W
 REFERENCE = "pt_cpu_square"
 NOTICE = (
     "24-image development diagnostic subset with human COCO boxes; not an unseen final test or a leaderboard. "
@@ -68,6 +72,7 @@ def build_parser():
     parser.add_argument("--model", type=Path, default=Path("yoloe-26s-seg.pt"))
     parser.add_argument("--onnx-seg", type=Path, help="tools/export_onnx.py 生成的 seg 变体 .onnx")
     parser.add_argument("--onnx-det", type=Path, help="tools/export_onnx.py 生成的 det 变体 .onnx")
+    parser.add_argument("--onnx-det-rect", type=Path, help="--dynamic-hw 导出的 det 变体 .onnx（矩形 letterbox）")
     parser.add_argument("--backends", type=parse_backends, default=list(DEFAULT_BACKENDS))
     parser.add_argument("--output", type=Path, default=Path("work/onnx_benchmark"))
     parser.add_argument("--repeats", type=positive_integer, default=3)
@@ -184,8 +189,7 @@ def project_path(path):
 
 
 def required_onnx(backends):
-    return {"seg": any(BACKENDS[name]["runtime"] == "onnxruntime" and BACKENDS[name]["graph"] == "seg" for name in backends),
-            "det": any(BACKENDS[name]["runtime"] == "onnxruntime" and BACKENDS[name]["graph"] == "det" for name in backends)}
+    return {key: any(BACKENDS[name].get("onnx") == key for name in backends) for key in ONNX_INPUTS}
 
 
 def validate_inputs(args, dataset):
@@ -204,22 +208,23 @@ def validate_inputs(args, dataset):
     for item in dataset["images"]:
         preflight_inference("cpu", args.imgsz, (int(item["height"]), int(item["width"]), 3))
     manifests = {}
-    for graph, needed in required_onnx(args.backends).items():
-        path = getattr(args, f"onnx_{graph}")
+    for key, needed in required_onnx(args.backends).items():
+        path, option = getattr(args, f"onnx_{key}"), "--onnx-" + key.replace("_", "-")
         if not needed:
             continue
         if path is None:
-            raise ValueError(f"所选后端需要 --onnx-{graph}")
+            raise ValueError(f"所选后端需要 {option}")
         manifest = read_manifest(project_path(path))
-        if manifest["variant"] != graph:
-            raise ValueError(f"--onnx-{graph} 的 manifest 变体是 {manifest['variant']}")
+        graph, dynamic = ONNX_INPUTS[key]
+        if manifest["variant"] != graph or manifest["export"].get("dynamic_hw", False) != dynamic:
+            raise ValueError(f"{option} 的 manifest 变体/动态尺寸不符：{manifest['variant']}")
         if manifest["classes"] != list(dataset["classes"]):
             raise ValueError("ONNX 固定类别及顺序必须与数据集类别一致：" + ", ".join(manifest["classes"]))
         if manifest["export"]["imgsz"] != args.imgsz:
             raise ValueError("ONNX 输入尺寸与 --imgsz 不一致")
         if manifest["source_model"]["sha256"] != sha256_file(model):
             raise ValueError("ONNX 不是由同一份 PyTorch 权重导出的")
-        manifests[graph] = manifest
+        manifests[key] = manifest
     return manifests
 
 
@@ -334,7 +339,7 @@ def run_worker(args):
     if config["runtime"] == "onnxruntime":
         from onnx_engine import OnnxRuntimeEngine
         engine = OnnxRuntimeEngine()
-        status = engine.load_model(project_path(getattr(args, f"onnx_{config['graph']}")), "CPU", threads=args.threads)
+        status = engine.load_model(project_path(getattr(args, f"onnx_{config['onnx']}")), "CPU", threads=args.threads)
         if status != "SUCCESS":
             raise RuntimeError(f"ONNX 模型加载未完成：{status}")
         load_ms, encoding_ms = (clock() - start) * 1000, 0.0
@@ -428,10 +433,10 @@ def worker_command(args, backend, output):
                "--dataset", str(project_path(args.dataset)), "--model", str(project_path(args.model)),
                "--threads", str(args.threads), "--imgsz", str(args.imgsz), "--conf", str(args.conf),
                "--iou", str(args.iou), "--max-det", str(args.max_det), "--warmup", str(args.warmup)]
-    for graph in ("seg", "det"):
-        path = getattr(args, f"onnx_{graph}")
+    for key in ONNX_INPUTS:
+        path = getattr(args, f"onnx_{key}")
         if path is not None:
-            command += [f"--onnx-{graph}", str(project_path(path))]
+            command += ["--onnx-" + key.replace("_", "-"), str(project_path(path))]
     if args.limit is not None:
         command += ["--limit", str(args.limit)]
     return command
