@@ -16,13 +16,34 @@ from engines import PromptFreeEngine
 from feedback_ui import CorrectionCanvas
 from prompt_modes import resolve_detection_model
 from i18n import message, exception_message, render
-from resource_safety import MAX_SOURCE_PIXELS
+from resource_safety import MAX_SOURCE_PIXELS, ResourceLimitError
+from sliced_inference import validate_slice_plan
 from ui_language import QFileDialog, QMessageBox, language_for
 
 STATE_TEXT = {"pending": "待审", "accepted": "已接受", "edited": "已修改", "rejected": "已拒绝"}
 STATE_MARK = {"pending": "○", "accepted": "✓", "edited": "✎", "rejected": "✗"}
 STATE_COLOR = {"undetected": "#888888", "accepted": "#2e9e4f", "edited": "#2f6fd0",
                "rejected": "#c0392b", "failed": "#d4801a"}
+# Start of the per-image message for a SAHI plan above the slice cap (the image is skipped).
+SLICE_SKIP_PREFIX = "已跳过（SAHI 切片过多）"
+# Run-only presets, recorded in the manifest. "accuracy_first" was measured on the held-out
+# COCO-240 subset with text prompts (README, docs/evaluation.md); left-side settings stay as they are.
+PRESETS = {
+    "accuracy_first": {
+        "model": "yoloe-26l-seg.pt",
+        "options": {"imgsz": 640, "conf": 0.40, "sliced": True, "slice_size": 320, "slice_overlap": 0.2,
+                    "max_slices": 9, "tiled": False, "low_light": False},
+    },
+}
+
+
+def local_weights_present(name):
+    """A real weights file next to the app; a Git LFS pointer is only a few hundred bytes.
+
+    Checked before loading so that Ultralytics never downloads a substitute file.
+    """
+    path = Path(__file__).resolve().parent / name
+    return path.is_file() and path.stat().st_size >= 1024 * 1024
 
 
 class AutoAnnotationWorker(QThread):
@@ -44,6 +65,7 @@ class AutoAnnotationWorker(QThread):
         self.running = True
         self.processed = 0
         self.failed = None
+        self.skipped = []  # indices skipped because their SAHI plan exceeds the slice cap
 
     def run(self):
         total = len(self.jobs)
@@ -71,6 +93,11 @@ class AutoAnnotationWorker(QThread):
                 # Same limit as the engine preflight, applied per file so one
                 # oversized photo is skipped instead of ending the whole batch.
                 self.image_failed.emit(index, message("输入图像超过 1600 万像素，请先缩小图像。"))
+            elif (reason := self._slice_skip_reason(frame)) is not None:
+                # Also a deterministic per-file input check: the 9-slice cap stays, this image is
+                # skipped and reported, and the rest of the folder is still detected.
+                self.skipped.append(index)
+                self.image_failed.emit(index, reason)
             else:
                 try:
                     started = time.perf_counter()
@@ -84,6 +111,18 @@ class AutoAnnotationWorker(QThread):
                                              "sha256": sha256, "elapsed": time.perf_counter() - started, "status": status,
                                              "run_index": self.run_index})
             self.progress.emit(done, total)
+
+    def _slice_skip_reason(self, frame):
+        if not self.options.get("sliced"):
+            return None
+        try:
+            validate_slice_plan(frame.shape, self.options.get("slice_size", 512),
+                                self.options.get("slice_overlap", 0.2), self.options.get("max_slices", 9))
+        except ResourceLimitError as exc:
+            return message("已跳过（SAHI 切片过多）：{error}\n本图未检测，本批其余图片继续。", error=exception_message(exc))
+        except ValueError:
+            return None  # invalid settings: the shared detection path reports them and stops the batch
+        return None
 
     def _fail(self, exc):
         self.failed = f"{type(exc).__name__}: {exc}"
@@ -163,6 +202,18 @@ class AutoAnnotationPanel(QWidget):
         settings_note = QLabel("使用左侧当前模型、设备、置信度、框数、推理尺寸、SAHI / 分块与暗光设置，开始时记入导出清单，运行中修改不影响本批。逐张串行、batch=1，沿用显存 / 内存保护，不使用跟踪编号。再次开始只处理未检测、失败或参数已变的待审图片，不覆盖人工审核。")
         settings_note.setWordWrap(True)
         root.addWidget(settings_note)
+        preset_row = QHBoxLayout()
+        self.preset = QComboBox()
+        self.preset.addItem("使用左侧设置（默认）", "")
+        self.preset.addItem("精度优先：YOLOE-26L + SAHI 320（较慢）", "accuracy_first")
+        self.preset.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.preset.setToolTip("精度优先只作用于本页的这一批：加载 YOLOE-26L（左侧模型栏随之显示 26L，仍只保留一个模型），推理尺寸 640、置信度 0.40、SAHI 320 切片（丢弃被内部切片边截断的框），关闭旧分块和暗光补检；设备和框数沿用左侧，其余左侧设置不变。参数记入导出清单。只支持文字提示。在 240 图人工标注留出集上 AP 更高，但更慢、候选框更多，见 README。")
+        preset_note = QLabel("预设只改变本批参数，记入导出清单；需要本地 YOLOE-26L 权重，只支持文字提示。")
+        preset_note.setWordWrap(True)
+        preset_row.addWidget(QLabel("本页预设:"))
+        preset_row.addWidget(self.preset)
+        preset_row.addWidget(preset_note, 1)
+        root.addLayout(preset_row)
         progress_row = QHBoxLayout()
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
@@ -293,7 +344,8 @@ class AutoAnnotationPanel(QWidget):
     def item_text(self, index):
         entry = self.session.entries[index]
         if entry.error:
-            state, mark = message("失败"), "!"
+            state = message("已跳过（切片过多）" if entry.error.startswith(SLICE_SKIP_PREFIX) else "失败")
+            mark = "!"
         elif entry.state == "pending":
             state = message("待审（已改动）" if entry.modified else "待审" if entry.detected else "未检测")
             mark = STATE_MARK["pending"] if entry.detected or entry.modified else "·"
@@ -334,6 +386,7 @@ class AutoAnnotationPanel(QWidget):
         self.folder_button.setEnabled(not running)
         self.recursive.setEnabled(not running)
         self.prompt_mode.setEnabled(not running)
+        self.preset.setEnabled(not running)
         self.prompt_input.setEnabled(not running and self.prompt_mode.currentData() == "text")
         self.start_button.setEnabled(has_images and not running)
         self.stop_button.setEnabled(running)
@@ -419,6 +472,12 @@ class AutoAnnotationPanel(QWidget):
             return
         visual = self.prompt_mode.currentData() == "visual"
         prompts, reference = parse_prompts(self.prompt_input.text()), None
+        preset = PRESETS.get(self.preset.currentData() or "")
+        if preset is not None:
+            problem = self._preset_problem(preset, prompts, visual)
+            if problem is not None:
+                self.notify(problem)
+                return
         if visual:
             prompt = app.ref_canvas.get_visual_prompt()
             if prompt is None:
@@ -433,8 +492,8 @@ class AutoAnnotationPanel(QWidget):
                              "box_xyxy": [float(value) for value in reference[1]], "label": reference[2]}
         # Nothing to detect: say so before stopping the live stream or loading weights.
         planned = self._planned_identity(prompts, visual, visual_record)
-        provisional = None if planned is None else self._run_config(
-            self._run_options(prompts, "visual" if visual else "text" if prompts else "prompt_free"), planned)
+        provisional = None if planned is None else self._run_config(self._preset_options(
+            self._run_options(prompts, "visual" if visual else "text" if prompts else "prompt_free")), planned)
         if not self.session.targets(provisional):
             self.notify(message("没有需要检测的待审图片；已审核或已改动的图片不会被覆盖。"))
             return
@@ -442,6 +501,10 @@ class AutoAnnotationPanel(QWidget):
         if not app.stop_video_stream():
             self.notify(message("正在等待当前模型推理完成，请稍后再操作…"))
             return
+        if preset is not None:
+            # The single loaded model must be the preset's; the combo has no load-on-change handler.
+            with QSignalBlocker(app.model_combo):
+                app.model_combo.setCurrentIndex(app.model_combo.findData(preset["model"]))
         if not app._ensure_detection_model(prompts, visual=visual):
             self.notify(message("自动标注未启动：模型未就绪，请查看状态栏提示。"))
             return
@@ -458,7 +521,7 @@ class AutoAnnotationPanel(QWidget):
             self.notify(message("无提示检测需要 YOLOE 无提示权重；不会用固定类别代替。"))
             return
         mode = "visual" if visual else "prompt_free" if prompt_free else "text"
-        options = self._run_options(prompts, mode)
+        options = self._preset_options(self._run_options(prompts, mode))
         identity = {"model": app.active_model_path, "model_sha256": app.active_model_sha256,
                     "device": str(engine.device), "visual_reference": visual_record,
                     "inference_options": engine.inference_options}
@@ -491,8 +554,30 @@ class AutoAnnotationPanel(QWidget):
         self.progress.setRange(0, len(jobs))
         self.progress.setValue(0)
         self.update_controls()
-        self.notify(message("自动标注已开始：{count} 张图片，逐张串行。", count=len(jobs)))
+        if preset is not None:
+            self.notify(message("自动标注已开始（精度优先预设：YOLOE-26L + SAHI 320）：{count} 张图片，逐张串行。", count=len(jobs)))
+        else:
+            self.notify(message("自动标注已开始：{count} 张图片，逐张串行。", count=len(jobs)))
         worker.start()
+
+    def _preset_options(self, options):
+        """Run options with the selected preset applied; the left-side widgets are not changed."""
+        key = self.preset.currentData() or ""
+        preset = PRESETS.get(key)
+        return dict(options, **(preset["options"] if preset else {}), preset=key or None)
+
+    def _selected_model(self):
+        preset = PRESETS.get(self.preset.currentData() or "")
+        return preset["model"] if preset else self.app.model_combo.currentData()
+
+    def _preset_problem(self, preset, prompts, visual):
+        """Checked before live detection stops or any weights load; None when the preset can run."""
+        if visual or not prompts:
+            return message("“精度优先”预设只用于文字提示。请输入提示词，或把本页预设改回“使用左侧设置”。")
+        if self.app.model_combo.findData(preset["model"]) < 0 or not local_weights_present(preset["model"]):
+            return message("未找到本地 YOLOE-26L 权重（{name}）；预设不会下载或替换模型。请先准备权重，或把本页预设改回“使用左侧设置”。",
+                           name=preset["model"])
+        return None
 
     def _run_options(self, prompts, mode):
         app = self.app
@@ -515,7 +600,7 @@ class AutoAnnotationPanel(QWidget):
         None when it would load or switch weights (the identity is not known yet)."""
         app = self.app
         try:
-            path = resolve_detection_model(app.model_combo.currentData(), prompt_free=not prompts and not visual)
+            path = resolve_detection_model(self._selected_model(), prompt_free=not prompts and not visual)
         except ValueError:
             return None
         device = "cpu" if app.device_combo.currentText() == "CPU" else "cuda:0"
@@ -575,10 +660,14 @@ class AutoAnnotationPanel(QWidget):
             return
         self.worker = None
         if self.session is not None and self.run_index is not None:
+            skipped = [self.session.entries[index].relative for index in worker.skipped]
             self.session.finish_run(self.run_index, processed=worker.processed, error=worker.failed,
                                     stopped_by_user=not worker.running and worker.failed is None,
-                                    model_sha256=worker.model_sha256)
-            if worker.failed is None:
+                                    model_sha256=worker.model_sha256, skipped_too_many_slices=skipped)
+            if worker.failed is None and skipped:
+                self.notify(message("自动标注结束：本批检测 {count} 张；{skipped} 张因 SAHI 切片超过上限被跳过（列表中标为“已跳过”）。可改用更大的切片或关闭 SAHI 后再次开始；已审核的图片不会被覆盖。",
+                                    count=worker.processed, skipped=len(skipped)))
+            elif worker.failed is None:
                 self.notify(message("自动标注结束：本批检测 {count} 张。请逐张审核，接受或修改后再导出。", count=worker.processed))
         self.run_index = None
         self.update_summary()
