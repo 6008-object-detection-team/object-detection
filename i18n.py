@@ -497,6 +497,11 @@ EN = {
     "自动标注已开始（精度优先预设：YOLOE-26L + SAHI 320）：{count} 张图片，逐张串行。": "Auto-labeling started (accuracy-first preset: YOLOE-26L + SAHI 320): {count} images, one at a time.",
     "“精度优先”预设只用于文字提示。请输入提示词，或把本页预设改回“使用左侧设置”。": "The accuracy-first preset supports text prompts only. Enter prompts, or set the page preset back to Use the left-side settings.",
     "未找到本地 YOLOE-26L 权重（{name}）；预设不会下载或替换模型。请先准备权重，或把本页预设改回“使用左侧设置”。": "Local YOLOE-26L weights ({name}) were not found. The preset does not download or substitute a model. Prepare the weights first, or set the page preset back to Use the left-side settings.",
+    # --- imp/visual ---
+    "无法读取参考图片": "Cannot read the reference image",
+    "无法读取参考图片：{path}\n请检查文件是否损坏或格式是否受支持；当前参考图保持不变。": "Cannot read the reference image: {path}\nCheck for corruption or an unsupported format. The current reference is kept.",
+    "视觉提示阈值:": "Visual-prompt threshold:",
+    "只用于视觉提示：本页检测（运行中修改立即生效）和第 4 页“视觉提示”方式（开始时读取并记入清单）。\n文字 / 无提示检测仍使用左侧置信度滑块。\n单张参考的视觉提示分数远低于文字提示，默认 0.03；0.40 只适合重新找到与参考几乎相同的物体。\n调低召回更多、误报也更多。": "Visual prompts only: detection on this page (changes apply immediately while running) and the Visual prompt mode on page 4 (read at start and recorded in the manifest).\nText / prompt-free detection keeps the confidence slider on the left.\nSingle-reference visual-prompt scores are far lower than text-prompt scores. The default is 0.03; 0.40 only re-finds objects that look almost identical to the reference.\nLower values find more objects and more false positives.",
 }
 
 

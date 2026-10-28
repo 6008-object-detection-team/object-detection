@@ -581,9 +581,11 @@ class AutoAnnotationPanel(QWidget):
 
     def _run_options(self, prompts, mode):
         app = self.app
+        # Visual prompts use the Tab 2 threshold, so the manifest records the value actually applied.
+        conf = app.visual_conf_spin.value() if mode == "visual" else app.conf_slider.value() / 100.0
         return {
             "mode": mode, "class_names": [] if mode == "prompt_free" else prompts,
-            "conf": app.conf_slider.value() / 100.0, "iou": 0.45, "max_det": app.max_det_spin.value(),
+            "conf": conf, "iou": 0.45, "max_det": app.max_det_spin.value(),
             "imgsz": app.resolution_combo.currentData(), "tiled": app.tile_checkbox.isChecked(),
             "sliced": app.sahi_checkbox.isChecked(), "slice_size": app.slice_size_combo.currentData(),
             "slice_overlap": 0.2, "max_slices": 9, "low_light": app.dce_checkbox.isChecked(),
