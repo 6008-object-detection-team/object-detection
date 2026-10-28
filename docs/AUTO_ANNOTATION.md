@@ -35,7 +35,7 @@
 | ✗ | 已拒绝 | 否 |
 | ! | 读取 / 检测失败 | 否 |
 
-导出最低分数只过滤“直接接受”图片中**未改动的模型框**；已修改的图片按人工结果原样导出，人工框没有分数、始终保留。
+导出最低分数只过滤**按分数批量接受**的图片（没有人逐张看过）中低于该分数的框。逐张接受或修改的图片按人工结果原样导出：人看过并接受的低分框是人工确认的目标，删掉会在训练标签里变成漏标。批量接受的图片如果没有框达到该分数，就不导出，而不是写一个空标签（空标签表示“图中没有目标”，没有人确认过）；清单列出这些图片，并记录每张图被分数过滤的框数。
 
 ## 导出格式
 
@@ -50,7 +50,7 @@
 
 - `images/` 副本与 `annotations.json`：`info`、`licenses`、`images`（`id` 从 1、`width` / `height`）、`annotations`（`bbox` 为 `[x, y, w, h]`、`area`、`iscrowd: 0`、`id` 从 1）、`categories`（`id` 从 1）。每个标注另有 `attributes.origin`（`model` / `model_edited` / `human`）与 `attributes.model_score`。
 
-**清单** `auto_annotation_manifest.json`（两种格式都有）：`label_provenance: "model candidates reviewed by a human"`、`human_ground_truth: false`、审核统计（逐张接受 / 批量接受 / 已修改 / 未导出的拒绝与待审数）、导出过滤、源文件夹、类别、每次检测运行（模型文件、标题、SHA-256、引擎、设备、提示方式与提示词、置信度、IoU、框数、尺寸、SAHI / 分块 / 暗光、推理选项、视觉参考图哈希与框、开始 / 结束时间、处理数、是否被停止或出错）、相关源码 SHA-256、每张图的源文件 SHA-256、宽高、状态、审核方式与框来源计数。DINO 使用 Hugging Face 缓存，`model_sha256` 记为空。
+**清单** `auto_annotation_manifest.json`（两种格式都有）：`label_provenance: "model candidates reviewed by a human"`、`human_ground_truth: false`、审核统计（逐张接受 / 批量接受 / 已修改 / 未导出的拒绝与待审数）、导出过滤、源文件夹、类别、每次检测运行（模型文件、标题、SHA-256、引擎、设备、提示方式与提示词、置信度、IoU、框数、尺寸、SAHI / 分块 / 暗光、推理选项、视觉参考图哈希与框、开始 / 结束时间、处理数、是否被停止或出错）、相关源码 SHA-256、每张图的源文件 SHA-256、宽高、状态、审核方式、框来源计数、被导出最低分数过滤的框数（`filtered_by_min_score`）和零面积未写入的框数，以及因过滤后无框而未导出的批量接受图片。DINO 使用 Hugging Face 缓存，`model_sha256` 记为空。
 
 ## 资源与串行
 

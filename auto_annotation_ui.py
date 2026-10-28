@@ -241,7 +241,7 @@ class AutoAnnotationPanel(QWidget):
         self.min_score.setSingleStep(0.05)
         self.min_score.setDecimals(2)
         self.min_score.setValue(0.0)
-        self.min_score.setToolTip("只过滤“直接接受”图片中未改动的模型框；已修改的图片按人工结果导出。")
+        self.min_score.setToolTip("只过滤“按分数批量接受”（未逐张查看）的图片中低于该分数的框；逐张接受或修改的图片按人工结果导出。批量接受的图片若没有框达到该分数则不导出。")
         self.export_yolo_button = QPushButton("导出 YOLO…")
         self.export_yolo_button.clicked.connect(lambda: self.export("yolo"))
         self.export_coco_button = QPushButton("导出 COCO…")
@@ -703,9 +703,13 @@ class AutoAnnotationPanel(QWidget):
             self._export_parent = parent
             target = Path(parent) / f"auto_labels_{fmt}_{datetime.now():%Y%m%d_%H%M%S}"
             result = (export_yolo if fmt == "yolo" else export_coco)(self.session, target, self.min_score.value())
-            self.notify(message("已导出 {format}：{images} 张图片、{boxes} 个框、{classes} 个类别 → {path}",
-                                format=fmt.upper(), images=result["images"], boxes=result["boxes"],
-                                classes=len(result["classes"]), path=str(result["path"])))
+            values = dict(format=fmt.upper(), images=result["images"], boxes=result["boxes"],
+                          classes=len(result["classes"]), path=str(result["path"]))
+            if result["skipped"]:
+                self.notify(message("已导出 {format}：{images} 张图片、{boxes} 个框、{classes} 个类别 → {path}。{skipped} 张批量接受的图片没有达到导出最低分数的框，未导出（见清单）。",
+                                    skipped=result["skipped"], **values))
+            else:
+                self.notify(message("已导出 {format}：{images} 张图片、{boxes} 个框、{classes} 个类别 → {path}", **values))
         except Exception as exc:
             self.notify(message("导出未完成：{error}", error=exception_message(exc)))
         self.update_summary()

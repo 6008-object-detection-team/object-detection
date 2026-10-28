@@ -343,24 +343,30 @@ class AnnotationSession:
         return values
 
     def export_boxes(self, entry, min_score=0.0):
-        """Edited images are exported as reviewed; the score filter only trims
-        untouched model boxes in images accepted without edits. Boxes with no area
+        """(boxes, counts) to write for one exported image.
+
+        ``min_score`` only filters images accepted in bulk by score, which nobody
+        opened; boxes a person accepted or edited are exported as reviewed, since
+        dropping them would turn objects into false negatives. Boxes with no area
         inside the image are dropped here, so the plan, the manifest and the
-        writers all count the same boxes."""
-        boxes = []
+        writers all count the same boxes.
+        """
+        bulk = entry.review_method == "bulk_min_score"
+        boxes, counts = [], {"filtered_by_min_score": 0, "zero_area": 0}
         for box in entry.boxes:
-            if entry.state == "accepted" and box_origin(box, entry.candidates) == "model" \
-                    and box["score"] is not None and box["score"] < min_score:
+            if bulk and box["score"] is not None and box["score"] < min_score:
+                counts["filtered_by_min_score"] += 1
                 continue
             x1, y1, x2, y2 = clip_box(box["xyxy"], entry.width, entry.height)
             if x2 <= x1 or y2 <= y1:
+                counts["zero_area"] += 1
                 continue
             boxes.append(box)
-        return boxes
+        return boxes, counts
 
     def export_classes(self, plan):
         names = list(self.classes)
-        for _, boxes in plan:
+        for _, boxes, _ in plan:
             for box in boxes:
                 if box["label"] not in names:
                     names.append(box["label"])
@@ -376,7 +382,7 @@ def _plan(session, target, min_score):
         raise ValueError("导出目录不能位于源图片文件夹内，原始图片保持不变")
     if target.exists():
         raise FileExistsError(message("导出目录已存在，不覆盖旧导出：{path}", path=str(target)))
-    plan = []
+    plan, skipped = [], []
     for entry in session.entries:
         if not entry.exported:
             continue
@@ -384,10 +390,17 @@ def _plan(session, target, min_score):
             raise ValueError(message("图片尚未读取，不能导出：{name}", name=entry.relative))
         if sha256_file(entry.path) != entry.sha256:
             raise ValueError(message("源图片在审核期间被修改：{name}", name=entry.relative))
-        plan.append((entry, session.export_boxes(entry, min_score)))
+        boxes, counts = session.export_boxes(entry, min_score)
+        if not boxes and entry.review_method == "bulk_min_score":
+            # An empty label claims "no objects"; nobody looked at this image.
+            skipped.append(entry.relative)
+            continue
+        plan.append((entry, boxes, counts))
+    if not plan and skipped:
+        raise ValueError(message("导出最低分数过滤后没有可导出的图片：{count} 张批量接受的图片没有达到该分数的框", count=len(skipped)))
     if not plan:
         raise ValueError("没有已接受或已修改的图片可导出；待审和已拒绝的图片不会导出")
-    return target, plan
+    return target, plan, skipped
 
 
 def _write_text(path, text):
@@ -411,11 +424,11 @@ def _staging_dir(target):
     return staging
 
 
-def build_manifest(session, fmt, min_score, plan, classes, files):
+def build_manifest(session, fmt, min_score, plan, skipped, classes, files):
     counts = session.counts()
-    used_runs = sorted({entry.run_index for entry, _ in plan if entry.run_index is not None})
+    used_runs = sorted({entry.run_index for entry, _, _ in plan if entry.run_index is not None})
     images = []
-    for entry, boxes in plan:
+    for entry, boxes, dropped in plan:
         origins = {"model": 0, "model_edited": 0, "human": 0}
         for box in boxes:
             origins[box_origin(box, entry.candidates)] += 1
@@ -423,7 +436,8 @@ def build_manifest(session, fmt, min_score, plan, classes, files):
                        "width": entry.width, "height": entry.height, "state": entry.state,
                        "review_method": entry.review_method, "bulk_min_score": entry.bulk_min_score,
                        "run_index": entry.run_index, "candidate_count": len(entry.candidates),
-                       "exported_boxes": len(boxes), "box_origins": origins})
+                       "exported_boxes": len(boxes), "filtered_by_min_score": dropped["filtered_by_min_score"],
+                       "zero_area_dropped": dropped["zero_area"], "box_origins": origins})
     return {
         "schema": "ee6008-auto-annotation/1",
         "format": fmt,
@@ -434,15 +448,20 @@ def build_manifest(session, fmt, min_score, plan, classes, files):
         "ground_truth_note": GROUND_TRUTH_NOTE,
         "review": {
             "exported_images": len(plan),
-            "accepted_per_image": sum(e.state == "accepted" and e.review_method == "per_image" for e, _ in plan),
-            "accepted_in_bulk_by_score": sum(e.review_method == "bulk_min_score" for e, _ in plan),
-            "edited": sum(e.state == "edited" for e, _ in plan),
+            "accepted_per_image": sum(e.state == "accepted" and e.review_method == "per_image" for e, _, _ in plan),
+            "accepted_in_bulk_by_score": sum(e.review_method == "bulk_min_score" for e, _, _ in plan),
+            "edited": sum(e.state == "edited" for e, _, _ in plan),
+            "bulk_accepted_not_exported_no_box_at_min_score": len(skipped),
             "rejected_not_exported": counts["rejected"],
             "pending_not_exported": counts["pending"],
             "bulk_note": "Bulk-accepted images were accepted by score threshold without opening each image.",
         },
         "export_filter": {"min_score": float(min_score),
-                          "applies_to": "untouched model boxes in images accepted without edits; edited images are exported exactly as reviewed"},
+                          "applies_to": "boxes in images accepted in bulk by score, which nobody opened; images a person "
+                                        "accepted or edited are exported exactly as reviewed",
+                          "bulk_images_without_box_at_min_score": skipped,
+                          "empty_after_filter_note": "A bulk-accepted image left with no box is not exported: an "
+                                                     "empty label would claim it has no objects, which nobody checked."},
         "source_folder": str(session.folder),
         "recursive_scan": session.recursive,
         "session_created_at": session.created_at,
@@ -467,9 +486,9 @@ def _copy_image(entry, root):
 
 def export_yolo(session, target, min_score=0.0):
     """images/ copies + labels/*.txt, classes.txt, images.txt and data.yaml."""
-    target, plan = _plan(session, target, min_score)
+    target, plan, skipped = _plan(session, target, min_score)
     labels = {}
-    for entry, _ in plan:
+    for entry, _, _ in plan:
         # Ultralytics finds a label by replacing the LAST "/images/" of the image
         # path with "/labels/", so images/images/x.jpg would be read from
         # images/labels/x.txt, a file this export never writes (silent background).
@@ -485,7 +504,7 @@ def export_yolo(session, target, min_score=0.0):
     staging = _staging_dir(target)
     try:
         listed, boxes_written = [], 0
-        for entry, boxes in plan:
+        for entry, boxes, _ in plan:
             _copy_image(entry, staging)
             lines = [line for line in (yolo_line(ids[box["label"]], box["xyxy"], entry.width, entry.height)
                                        for box in boxes) if line]
@@ -503,25 +522,25 @@ def export_yolo(session, target, min_score=0.0):
             f"nc: {len(classes)}\nnames:\n{names}"))
         files = {"images": "images/", "labels": "labels/", "classes": "classes.txt",
                  "image_list": "images.txt", "data_yaml": "data.yaml"}
-        _write_json(staging / MANIFEST_NAME, build_manifest(session, "yolo", min_score, plan, classes, files))
+        _write_json(staging / MANIFEST_NAME, build_manifest(session, "yolo", min_score, plan, skipped, classes, files))
         _commit(staging, target)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
     session.dirty = False
-    return {"path": target, "images": len(plan), "boxes": boxes_written, "classes": classes}
+    return {"path": target, "images": len(plan), "boxes": boxes_written, "classes": classes, "skipped": len(skipped)}
 
 
 def export_coco(session, target, min_score=0.0):
     """images/ copies + annotations.json (category IDs from 1) + manifest."""
-    target, plan = _plan(session, target, min_score)
+    target, plan, skipped = _plan(session, target, min_score)
     classes = session.export_classes(plan)
     ids = {name: index + 1 for index, name in enumerate(classes)}
     staging = _staging_dir(target)
     try:
         created = now_iso()
         images, annotations = [], []
-        for image_id, (entry, boxes) in enumerate(plan, 1):
+        for image_id, (entry, boxes, _) in enumerate(plan, 1):
             _copy_image(entry, staging)
             images.append({"id": image_id, "file_name": entry.relative, "width": entry.width,
                            "height": entry.height, "license": 0, "date_captured": ""})
@@ -543,13 +562,13 @@ def export_coco(session, target, min_score=0.0):
         }
         _write_json(staging / "annotations.json", coco)
         files = {"images": "images/", "annotations": "annotations.json"}
-        _write_json(staging / MANIFEST_NAME, build_manifest(session, "coco", min_score, plan, classes, files))
+        _write_json(staging / MANIFEST_NAME, build_manifest(session, "coco", min_score, plan, skipped, classes, files))
         _commit(staging, target)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
     session.dirty = False
-    return {"path": target, "images": len(plan), "boxes": len(annotations), "classes": classes}
+    return {"path": target, "images": len(plan), "boxes": len(annotations), "classes": classes, "skipped": len(skipped)}
 
 
 def detect_candidates(engine, frame, options, enhancer=None):

@@ -227,14 +227,14 @@ class ExportTests(unittest.TestCase):
     def test_yolo_exports_only_accepted_or_edited_images(self):
         target = self.root / "out" / "yolo"
         result = export_yolo(self.session, target, min_score=0.5)
-        self.assertEqual((result["images"], result["boxes"]), (2, 3))
+        self.assertEqual((result["images"], result["boxes"], result["skipped"]), (2, 4, 0))
         self.assertEqual(sorted(path.name for path in (target / "images").iterdir()), ["img0.png", "img1.png"])
         self.assertEqual(sorted(path.name for path in (target / "labels").iterdir()), ["img0.txt", "img1.txt"])
         self.assertEqual((target / "classes.txt").read_text(encoding="utf-8").splitlines(), ["bottle", "cup", "cell phone"])
         img0 = (target / "labels" / "img0.txt").read_text().splitlines()
         img1 = (target / "labels" / "img1.txt").read_text().splitlines()
-        # min_score trims the untouched 0.3 cup in the accepted image only.
-        self.assertEqual(img0, ["0 0.200000 0.500000 0.200000 0.500000"])
+        # A person accepted the 0.3 cup: min_score only filters bulk-accepted images.
+        self.assertEqual(img0, ["0 0.200000 0.500000 0.200000 0.500000", "1 0.745000 0.500000 0.490000 0.750000"])
         self.assertEqual(img1, ["1 0.700000 0.500000 0.500000 0.750000", "2 0.700000 0.806250 0.200000 0.362500"])
         for line in img0 + img1:
             self.assertRegex(line, YOLO_LINE)
@@ -303,6 +303,30 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(manifest["images"][1]["box_origins"], {"model": 0, "model_edited": 1, "human": 1})
         self.assertEqual(manifest["images"][0]["source_sha256"], hashlib.sha256((self.folder / "img0.png").read_bytes()).hexdigest())
         self.assertIn("auto_annotation.py", manifest["code_sha256"])
+
+    def test_min_score_filters_only_bulk_accepted_images_and_never_empties_them(self):
+        self.assertEqual(self.session.bulk_accept(0.2), 1)  # img3: both candidates, nobody looked
+        target = self.root / "out" / "yolo"
+        result = export_yolo(self.session, target, min_score=0.5)
+        self.assertEqual((result["images"], result["boxes"], result["skipped"]), (3, 5, 0))
+        self.assertEqual(len((target / "labels" / "img0.txt").read_text().splitlines()), 2)
+        self.assertEqual((target / "labels" / "img3.txt").read_text().splitlines(), ["0 0.200000 0.500000 0.200000 0.500000"])
+        manifest = json.loads((target / MANIFEST_NAME).read_text(encoding="utf-8"))
+        rows = {row["file"]: row for row in manifest["images"]}
+        self.assertEqual({name: row["filtered_by_min_score"] for name, row in rows.items()},
+                         {"img0.png": 0, "img1.png": 0, "img3.png": 1})
+        # At 0.95 no box of img3 is left: it is skipped, not exported with an empty label.
+        result = export_coco(self.session, self.root / "out" / "coco", min_score=0.95)
+        self.assertEqual((result["images"], result["skipped"]), (2, 1))
+        manifest = json.loads((self.root / "out" / "coco" / MANIFEST_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(manifest["export_filter"]["bulk_images_without_box_at_min_score"], ["img3.png"])
+        self.assertEqual(manifest["review"]["bulk_accepted_not_exported_no_box_at_min_score"], 1)
+        self.assertEqual([row["file"] for row in manifest["images"]], ["img0.png", "img1.png"])
+        bulk_only = detected_session(self.root / "bulk", 1)
+        bulk_only.bulk_accept(0.5)
+        with self.assertRaisesRegex(ValueError, "批量接受"):
+            export_yolo(bulk_only, self.root / "out" / "bulk_only", min_score=0.95)
+        self.assertFalse((self.root / "out" / "bulk_only").exists())
 
     def test_manifest_counts_only_boxes_that_are_written(self):
         # A zero-width box (e.g. a slip of the mouse) cannot be written to YOLO or COCO.
