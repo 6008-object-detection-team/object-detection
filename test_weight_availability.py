@@ -140,6 +140,19 @@ class ModelListTests(unittest.TestCase):
         self.assertIn("没有加载或替换任何模型", render(detail, "zh"))
         self.assertIs(window.engine, previous)
 
+    def test_label_is_refreshed_after_weights_arrive_and_load(self):
+        window, _ = self.window({"yoloe-26l-seg.pt"})
+        index = window.model_combo.findData("yoloe-26l-seg.pt")
+        self.assertIn("未下载", window.model_combo.itemText(index))
+        with patch("main.weight_state", return_value="ok"), \
+                patch.object(OpenVocabEngine, "load_model", return_value="SUCCESS"), \
+                patch("torch.cuda.is_available", return_value=False):
+            self.assertTrue(window._load_model_path("yoloe-26l-seg.pt"))  # fetched while the app ran
+        self.assertNotIn("未下载", window.model_combo.itemText(index))
+        self.assertEqual(window.model_combo.currentData(), "yoloe-26l-seg.pt")
+        window.ui_language.set_language("en")
+        self.assertNotIn("not downloaded", window.model_combo.itemText(index))
+
     def test_prompt_free_weights_keep_their_own_manifest_check(self):
         window, _ = self.window({"yoloe-26s-seg-pf.pt"})
         with patch("main.weight_state", return_value="lfs_pointer"), \

@@ -311,6 +311,8 @@ class AIApp(QMainWindow):
             self.active_model_sha256 = self._feedback_versions.get(model_path, {}).get("checkpoint_sha256", "")
             self.engine = engine
             self.engine.imgsz = self.resolution_combo.currentData()
+            # Weights fetched while the app runs lose their "(not downloaded)" suffix here.
+            self._mark_missing_models()
             index = self.model_combo.findData(model_path)
             if index >= 0:
                 self.model_combo.blockSignals(True)
