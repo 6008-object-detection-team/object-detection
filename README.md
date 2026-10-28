@@ -87,8 +87,8 @@ QT_QPA_PLATFORM=offscreen python -m unittest discover -q
 - 新增 `tools/benchmark_realtime.py`：无界面运行程序自己的摄像头路径（`CameraReader`、最新帧邮箱、检测 + ByteTrack + 画框、待显示缓冲、`DisplayMetrics`），比较当前的 `latest`、工具内的“每帧排队” `fifo` 和移植的 10-06 之前同步循环 `sync`。输入可以是按 30 FPS 实时回放的 COCO 图片序列，也可以是真实摄像头（只计时，不保存、不显示、不上传画面，每次最多 60 秒）。输出逐帧 CSV 和带代码 / 权重 / 数据指纹的 JSON。程序默认行为和界面都没有改动。
 - 本机结果（RTX 5060 Laptop / Core Ultra 7 251HX，YOLOE-26S、640、conf 0.40，每组 3 次 × 30 秒，同一次锁内背靠背运行）：
   - 程序默认的摄像头设置（YUYV 1280×720，10 FPS）下，CPU 和 CUDA 都跟得上帧率，三种调度的 FPS 和延迟没有可分辨的差异。e2e p50 约 108 ms（CUDA）和 140 ms（CPU），其中约 94 ms 是驱动时间戳到 `read()` 返回的时间。**本机默认设置下，不能宣称 10-06 改造提高了 FPS 或降低了延迟。**
-  - 检测慢于帧率时（CPU，30 FPS 输入），fifo 的延迟在 30 秒内涨到数秒，latest 保持有界。非默认的真实摄像头 MJPG 30 FPS + 4 缓冲一组中，旧同步循环 e2e p50 240 ms、18.9 FPS，latest 为 101 ms、20.9 FPS。如果驱动只保留 1 个缓冲，旧循环延迟更低（53 对 73 ms）但 FPS 更低（15.0 对 17.8），这时是取舍而不是单纯改善。
-  - 发现：本机 V4L2 接受程序的 `CAP_PROP_BUFFERSIZE=1` 请求，这会让 30 FPS 的 MJPG 流只剩约 15 FPS；改成 4 个缓冲后 CUDA 得到 29.6 FPS，延迟不变。本分支没有修改这个默认值，需要先在 Windows DirectShow 和组员摄像头上复核。
+  - 检测慢于帧率时（CPU，30 FPS 输入），fifo 的延迟在 30 秒内涨到数秒，latest 保持有界。非默认的真实摄像头 MJPG 30 FPS + 4 缓冲一组中，旧同步循环 e2e p50 240 ms、18.9 FPS，latest 为 101 ms、20.9 FPS。只有 1 个缓冲时没有统一结论：回放源（模拟 1 缓冲驱动）中旧循环延迟更低（53 对 73 ms）但 FPS 更低（15.0 对 17.8）；真实摄像头 MJPG 1 缓冲时 CPU 旧循环反而 FPS 更高（16.5 对 15.0）、e2e p50 更低（77 对 81 ms），只有 p95 更高（92 对 84 ms）。这时是取舍而不是单纯改善。fifo 的延迟只统计停止前处理完的帧，是下限。
+  - 发现：本机 V4L2 接受程序的 `CAP_PROP_BUFFERSIZE=1` 请求，这会让 30 FPS 的 MJPG 流只剩约 15 FPS；改成 4 个缓冲后 CUDA 收到 29.6 FPS（e2e p50 45–46 ms，1 缓冲时 48–51 ms）；CPU latest 输出 20.9 FPS，但 p50 由 81 升到 101 ms（跨会话，非严格对照）。本分支没有修改这个默认值，需要先在 Windows DirectShow 和组员摄像头上复核。
 - 验证：新增 30 项无模型、无摄像头的测试；完整回归 338 项，337 项通过，1 项因缺少完整 COCO 原始标注缓存跳过。**未验证**：组员 RTX 3060 / Windows、Qt 绘制和屏幕刷新、有运动目标的真实场景、跳帧对 ByteTrack 的影响，以及任何精度指标。方法、完整表格和局限见 [视频实时性说明](docs/VIDEO_REALTIME.md#实测结果2026-10-28)。
 
 ## 2026-10-28 暗光定量评价（合成暗光）
