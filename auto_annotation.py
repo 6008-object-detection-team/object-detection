@@ -19,7 +19,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from i18n import message
+from i18n import Message, message
 
 PROJECT = Path(__file__).resolve().parent
 ANNOTATION_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".bmp"})
@@ -281,7 +281,8 @@ class AnnotationSession:
         return True
 
     def set_error(self, index, error):
-        self.entries[index].error = str(error)
+        # A Message (a str) keeps its template, so the GUI can show the reason in either language.
+        self.entries[index].error = error if isinstance(error, Message) else str(error)
 
     # Review --------------------------------------------------------------
     def update_boxes(self, index, boxes):

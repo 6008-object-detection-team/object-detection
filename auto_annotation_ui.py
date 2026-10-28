@@ -18,7 +18,7 @@ from feedback_ui import CorrectionCanvas
 from prompt_modes import resolve_detection_model
 from i18n import message, exception_message, render
 from resource_safety import MAX_SOURCE_PIXELS, ResourceLimitError
-from sliced_inference import validate_slice_plan
+from sliced_inference import slice_count, validate_slice_plan
 from ui_language import QFileDialog, QMessageBox, language_for
 
 STATE_TEXT = {"pending": "待审", "accepted": "已接受", "edited": "已修改", "rejected": "已拒绝"}
@@ -29,6 +29,8 @@ STATE_COLOR = {"undetected": "#888888", "accepted": "#2e9e4f", "edited": "#2f6fd
 SLICE_SKIP_PREFIX = "已跳过（SAHI 切片过多）"
 # Run-only presets, recorded in the manifest. "accuracy_first" was measured on the held-out
 # COCO-240 subset with text prompts (README, docs/evaluation.md); left-side settings stay as they are.
+# Its fixed 320 px slices fit a 3x3 grid at most, i.e. any image up to 832x832 (1280x720 needs 15
+# slices): larger images are skipped, never re-sliced at another size the preset was not measured with.
 PRESETS = {
     "accuracy_first": {
         "model": "yoloe-26l-seg.pt",
@@ -120,6 +122,16 @@ class AutoAnnotationWorker(QThread):
             validate_slice_plan(frame.shape, self.options.get("slice_size", 512),
                                 self.options.get("slice_overlap", 0.2), self.options.get("max_slices", 9))
         except ResourceLimitError as exc:
+            if self.options.get("preset"):
+                # The preset overrides the left-side slice / SAHI controls, so advice to change them would not help.
+                height, width = frame.shape[:2]
+                return message(
+                    "已跳过（SAHI 切片过多）：本图 {width}×{height} 用本页预设的 {size} 像素切片需要 {count} 块，超过 {maximum} 块上限。"
+                    "预设固定使用 {size} 像素切片，左侧的切片和 SAHI 设置对本批不起作用；请把本页预设改回“使用左侧设置”后选更大的切片或关闭 SAHI，或先缩小图片。"
+                    "\n本图未检测，本批其余图片继续。",
+                    width=width, height=height, size=int(self.options.get("slice_size", 512)),
+                    count=slice_count(frame.shape, self.options.get("slice_size", 512), self.options.get("slice_overlap", 0.2)),
+                    maximum=int(self.options.get("max_slices", 9)))
             return message("已跳过（SAHI 切片过多）：{error}\n本图未检测，本批其余图片继续。", error=exception_message(exc))
         except ValueError:
             return None  # invalid settings: the shared detection path reports them and stops the batch
@@ -208,7 +220,7 @@ class AutoAnnotationPanel(QWidget):
         self.preset.addItem("使用左侧设置（默认）", "")
         self.preset.addItem("精度优先：YOLOE-26L + SAHI 320（较慢）", "accuracy_first")
         self.preset.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-        self.preset.setToolTip("精度优先只作用于本页的这一批：加载 YOLOE-26L（左侧模型栏随之显示 26L，仍只保留一个模型），推理尺寸 640、置信度 0.40、SAHI 320 切片（丢弃被内部切片边截断的框），关闭旧分块和暗光补检；设备和框数沿用左侧，其余左侧设置不变。参数记入导出清单。只支持文字提示。在 240 图人工标注留出集上 AP 更高，但更慢、候选框更多，见 README。")
+        self.preset.setToolTip("精度优先只作用于本页的这一批：加载 YOLOE-26L（左侧模型栏随之显示 26L，仍只保留一个模型），推理尺寸 640、置信度 0.40、SAHI 320 切片（丢弃被内部切片边截断的框），关闭旧分块和暗光补检；设备和框数沿用左侧，其余左侧设置不变。参数记入导出清单。只支持文字提示。SAHI 320 最多 9 块，832×832 以内的图片都能处理；1280×720、1080p 视频帧和手机照片超过上限，会被跳过。在 240 图人工标注留出集（图片都不超过 640 像素）上 AP 更高，但更慢、候选框更多，见 README。")
         preset_note = QLabel("预设只改变本批参数，记入导出清单；需要本地 YOLOE-26L 权重，只支持文字提示。")
         preset_note.setWordWrap(True)
         preset_row.addWidget(QLabel("本页预设:"))
@@ -420,6 +432,8 @@ class AutoAnnotationPanel(QWidget):
         if item is None or entry is None:
             return
         item.setText(render(self.item_text(index), self._language()))
+        # The full reason (e.g. which slice size would fit) is only in the tooltip and the status.
+        item.setToolTip(render(entry.error, self._language()) if entry.error else "")
         key = "failed" if entry.error else entry.state if entry.state != "pending" else \
             ("undetected" if not entry.detected and not entry.modified else "")
         item.setForeground(QColor(STATE_COLOR[key]) if key else self.image_list.palette().text().color())
@@ -779,7 +793,11 @@ class AutoAnnotationPanel(QWidget):
             self.session.finish_run(self.run_index, processed=worker.processed, error=worker.failed,
                                     stopped_by_user=not worker.running and worker.failed is None,
                                     model_sha256=worker.model_sha256, skipped_too_many_slices=skipped)
-            if worker.failed is None and skipped:
+            preset = self.session.runs[self.run_index].get("preset")
+            if worker.failed is None and skipped and preset:
+                self.notify(message("自动标注结束：本批检测 {count} 张；{skipped} 张因 SAHI 切片超过上限被跳过（列表中标为“已跳过”，悬停可看原因）。精度优先预设固定使用 320 像素切片，最多 9 块：832×832 以内的图片都放得下，1280×720 需要 15 块。请把本页预设改回“使用左侧设置”，再选更大的切片或关闭 SAHI 后再次开始；已审核的图片不会被覆盖。",
+                                    count=worker.processed, skipped=len(skipped)))
+            elif worker.failed is None and skipped:
                 self.notify(message("自动标注结束：本批检测 {count} 张；{skipped} 张因 SAHI 切片超过上限被跳过（列表中标为“已跳过”）。可改用更大的切片或关闭 SAHI 后再次开始；已审核的图片不会被覆盖。",
                                     count=worker.processed, skipped=len(skipped)))
             elif worker.failed is None:
@@ -817,6 +835,8 @@ class AutoAnnotationPanel(QWidget):
         self.canvas.set_sample(image, entry.boxes)
         self.rebuild_boxes()
         self.update_controls()
+        if entry.error:
+            self.notify(entry.error)
 
     def box_text(self, index, box):
         coords = ", ".join(f"{value:.0f}" for value in box["xyxy"])

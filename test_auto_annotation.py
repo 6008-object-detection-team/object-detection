@@ -978,6 +978,48 @@ class AutoAnnotationTabTests(unittest.TestCase):
         self.assertIn("1 skipped", panel.status_label.text())
         # Starting again retries the skipped image (e.g. after choosing a larger slice size).
         self.assertIn(1, [index for index, _ in panel.session.targets(None)])
+
+    def test_skip_reason_is_shown_as_tooltip_and_status_in_both_languages(self):
+        from auto_annotation_ui import AutoAnnotationWorker
+        panel = self.panel
+        panel.load_folder(self.folder)
+        reason = AutoAnnotationWorker(MagicMock(), MagicMock(), [], {"sliced": True, "slice_size": 320}) \
+            ._slice_skip_reason(np.zeros((1080, 1920, 3), np.uint8))
+        panel.on_image_failed(1, reason)
+        self.assertIn("1920×1080", panel.image_list.item(1).toolTip())
+        self.assertIn("640 像素切片", panel.image_list.item(1).toolTip())
+        self.assertEqual(panel.image_list.item(0).toolTip(), "")
+        panel.image_list.setCurrentRow(1)  # the image itself is readable, so the canvas shows it
+        self.assertIn("1920×1080", panel.status_label.text())
+        self.switch("en")
+        self.assertIn("Use 640 px slices", panel.image_list.item(1).toolTip())
+        self.assertIsNone(HAN.search(panel.image_list.item(1).toolTip()))
+        self.assertIn("1920×1080", panel.status_label.text())
+        self.assertIsNone(HAN.search(panel.status_label.text()))
+
+    def test_preset_skip_advice_points_back_to_the_page_preset(self):
+        from auto_annotation_ui import AutoAnnotationWorker, PRESETS
+        options = dict(PRESETS["accuracy_first"]["options"], preset="accuracy_first")
+        worker = AutoAnnotationWorker(MagicMock(), MagicMock(), [], options)
+        for shape in ((480, 640), (832, 832), (500, 1000)):
+            self.assertIsNone(worker._slice_skip_reason(np.zeros((*shape, 3), np.uint8)), shape)
+        reason = worker._slice_skip_reason(np.zeros((720, 1280, 3), np.uint8))
+        english = render(reason, "en")
+        self.assertTrue(str(reason).startswith("已跳过（SAHI 切片过多）"))
+        self.assertIn("1280×720 image needs 15 slices", english)
+        self.assertIn("preset back to Use the left-side settings", english)
+        self.assertNotIn("Use 512 px", english)
+        panel = self.panel
+        panel.load_folder(self.folder)
+        panel.run_index = panel.session.begin_run(dict(options, config="{}"))
+        panel.on_image_failed(1, reason)
+        worker = panel.worker = MagicMock(skipped=[1], processed=2, failed=None, running=True, model_sha256="a" * 64)
+        panel.on_finished(worker)
+        self.assertIn("改回“使用左侧设置”", panel.status_label.text())
+        self.assertIn("832×832", panel.status_label.text())
+        self.switch("en")
+        self.assertIn("Set this page's preset back", panel.status_label.text())
+        self.assertIn("Skipped (too many slices)", panel.image_list.item(1).text())
     # C1: keyboard shortcuts ------------------------------------------------
     def focus_and_press(self, widget, key, modifier=Qt.NoModifier):
         # A WidgetWithChildrenShortcut only fires while its tab is the active
