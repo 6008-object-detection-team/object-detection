@@ -47,7 +47,8 @@ REFERENCE = "pt_cpu_square"
 NOTICE = (
     "24-image development diagnostic subset with human COCO boxes; not an unseen final test or a leaderboard. "
     "Latency = one detect() call (preprocessing, forward, decoding/NMS, result transfer); excludes image "
-    "decoding, model loading, prompt encoding and warm-up. Each backend runs in a fresh process per repeat; "
+    "decoding, model loading, prompt encoding and warm-up. PyTorch's thread count is restored after Ultralytics "
+    "predictor setup (which resets it to min(8, CPUs - 1)) and verified after timing. Each backend runs in a fresh process per repeat; "
     "repeats are back to back on one host in a rotated order with load averages recorded. Peak RSS is each "
     "worker's own lifetime high-water mark including loading. onnxruntime-gpu is not installed, so ONNX Runtime "
     "ran only on CPUExecutionProvider. Agreement compares two models' predictions, never ground truth."
@@ -326,7 +327,8 @@ def run_worker(args):
     classes = list(dataset["classes"])
     model_path = project_path(args.model)
     synchronize = lambda: None
-    extra, torch_threads = {}, None
+    extra = {}
+    threads = {"requested": args.threads}
     clock = time.perf_counter
     start = clock()
     if config["runtime"] == "onnxruntime":
@@ -337,10 +339,10 @@ def run_worker(args):
             raise RuntimeError(f"ONNX 模型加载未完成：{status}")
         load_ms, encoding_ms = (clock() - start) * 1000, 0.0
         extra["providers"] = engine.providers
+        threads["onnxruntime_intra_op"] = args.threads
     else:
         import torch
         torch.set_num_threads(args.threads)
-        torch_threads = torch.get_num_threads()
         if config["device"] == "CUDA":
             from engines import OpenVocabEngine
             engine = OpenVocabEngine()
@@ -373,6 +375,12 @@ def run_worker(args):
         options = {"conf": args.conf, "iou": args.iou, "class_names": classes, "max_det": args.max_det}
         synchronize()
         start = clock()
+        engine.detect(first, **options)  # Builds the predictor/session state.
+        if config["runtime"] == "pytorch":
+            # Ultralytics select_device("cpu") resets torch to min(8, CPUs - 1) threads
+            # while setting up the predictor; restore the requested count before warm-up.
+            threads["torch_after_predictor_setup"] = torch.get_num_threads()
+            torch.set_num_threads(args.threads)
         for _ in range(args.warmup):
             engine.detect(first, **options)
         synchronize()
@@ -391,6 +399,10 @@ def run_worker(args):
             stages.append(dict(engine.last_timing) if config["runtime"] == "onnxruntime" else pytorch_stage_ms(engine))
             predictions.extend(detection_records(detections, item["id"], dataset["category_ids"]))
             del frame, detections
+        if config["runtime"] == "pytorch":
+            threads["torch_after_timing"] = torch.get_num_threads()
+            if threads["torch_after_timing"] != args.threads:
+                raise RuntimeError(f"PyTorch 计时线程数为 {threads['torch_after_timing']}，不是请求的 {args.threads}")
         if config["device"] == "CUDA":
             extra["peak_allocated_mib"] = torch.cuda.max_memory_allocated(0) / 1024 ** 2
             extra["peak_reserved_mib"] = torch.cuda.max_memory_reserved(0) / 1024 ** 2
@@ -399,8 +411,7 @@ def run_worker(args):
     image_ids = [int(item["id"]) for item in dataset["images"]]
     result = {
         "status": "complete", "backend": args.worker, "config": config, "pid": os.getpid(), **started,
-        "loadavg_after": loadavg(), "threads": {"requested": args.threads, "torch": torch_threads,
-                                                "onnxruntime_intra_op": args.threads if config["runtime"] == "onnxruntime" else None},
+        "loadavg_after": loadavg(), "threads": threads,
         "torch_imported": "torch" in sys.modules, "model_load_ms": load_ms, "prompt_encoding_ms": encoding_ms,
         "warmup_ms": warmup_ms, "image_ids": image_ids, "latency_ms": latencies, "stage_ms": stages,
         "predictions": cap_predictions(predictions, image_ids, args.max_det),
