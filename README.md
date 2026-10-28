@@ -47,7 +47,7 @@ python tools/benchmark_onnx.py --onnx-det-rect work/onnx_export/yoloe-26s-det-mi
 python tools/benchmark_realtime.py --source video --device cpu --repeats 3 --duration 30 --output-root work/realtime_benchmark
 python tools/benchmark_realtime.py --summarize work/realtime_benchmark/<会话目录>
 
-# 暗光评价：默认 CPU；--limit 2 --bootstrap-samples 50 可做冒烟检查
+# 暗光评价：默认 CPU；--limit 2 --bootstrap-samples 50 可做冒烟检查；--output 须为不存在或空的目录，不覆盖旧实验
 python tools/evaluate_lowlight.py --device CUDA --output work/lowlight_eval
 ~~~
 

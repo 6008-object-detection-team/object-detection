@@ -98,7 +98,8 @@ def build_parser():
     parser.add_argument("--model", type=Path, default=Path("yoloe-26s-seg.pt"))
     parser.add_argument("--device", type=str.upper, choices=("CPU", "CUDA"), default="CPU",
                         help="显式选择设备；失败时停止，不自动切换")
-    parser.add_argument("--output", type=Path, default=Path("work/lowlight_eval"))
+    parser.add_argument("--output", type=Path, default=Path("work/lowlight_eval"),
+                        help="结果目录；必须不存在或为空，不覆盖旧实验")
     parser.add_argument("--exposures", type=exposure_list, default=list(DEFAULT_EXPOSURES))
     parser.add_argument("--full-well", type=float, default=FULL_WELL, help="原曝光白电平的光电子数")
     parser.add_argument("--read-noise", type=float, default=READ_NOISE, help="线性域读出噪声标准差")
@@ -812,7 +813,7 @@ def git_state():
                                timeout=20, check=True).stdout.strip()
         return {"commit": commit, "tracked_source_changes": bool(dirty)}
     except (OSError, subprocess.SubprocessError):
-        return {"commit": None, "tracked_changes": None}
+        return {"commit": None, "tracked_source_changes": None}
 
 
 def default_engine_factory(args):
@@ -841,6 +842,12 @@ def main(argv=None, engine_factory=None, enhancer_factory=None):
     if not 32 <= args.imgsz <= 960 or not 1 <= args.max_det <= 1000 or args.gui_conf < args.conf:
         print("参数超出安全范围：imgsz 32–960、max-det 1–1000，且界面阈值不能低于 AP 阈值。", file=sys.stderr)
         return 1
+    output = args.output if args.output.is_absolute() else PROJECT / args.output
+    output = output.resolve()
+    if output.exists() and any(output.iterdir()):
+        # Never overwrite an earlier report or leave its prediction files next to a new one.
+        print(f"输出目录非空，不覆盖旧实验：{output}", file=sys.stderr)
+        return 1
     specs = args.source or list(DEFAULT_SOURCES)
     dataset = load_sources(specs, PROJECT, args.limit)
     annotations = dataset["annotations"]
@@ -849,8 +856,6 @@ def main(argv=None, engine_factory=None, enhancer_factory=None):
     for item in annotations["images"]:
         preflight_inference("cpu", args.imgsz, (int(item["height"]), int(item["width"]), 3))
     from pycocotools.coco import COCO  # noqa: F401  # evaluator available before any model loads
-    output = args.output if args.output.is_absolute() else PROJECT / args.output
-    output = output.resolve()
     (output / "predictions").mkdir(parents=True, exist_ok=True)
     levels = [{"name": f"L{index + 1}", "exposure": exposure,
                "display_scale": exposure ** (1 / GAMMA)} for index, exposure in enumerate(args.exposures)]

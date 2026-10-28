@@ -7,7 +7,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import cv2
@@ -18,9 +18,9 @@ from engines import OpenVocabEngine
 from evaluate_mini_dataset import coco_metrics
 from tools.analyze_saved_predictions import resample_images
 from tools.evaluate_lowlight import (
-    DARK_CONDITIONS, SCHEMA, build_parser, default_example_image, evaluation_tables, legacy_clahe,
-    main, paired_bootstrap, run_dark_conditions, synthesize_low_light, threshold_counts,
-    validate_report, weighted_metrics,
+    DARK_CONDITIONS, SCHEMA, build_parser, default_example_image, evaluation_tables,
+    git_state, legacy_clahe, main, paired_bootstrap, run_dark_conditions, synthesize_low_light,
+    threshold_counts, validate_report, weighted_metrics,
 )
 
 
@@ -271,6 +271,20 @@ class EndToEndReportTests(unittest.TestCase):
             broken.pop("bootstrap")
             with self.assertRaises(ValueError):
                 validate_report(broken)
+            # A second run never overwrites the first report or mixes prediction files.
+            before = (output / "report.json").read_bytes()
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = main(["--source", f"fixture={root / 'annotations.json'},{root / 'images'}",
+                             "--output", str(output), "--exposures", "0.25"], engine_factory=lambda args: engine)
+            self.assertEqual(code, 1)
+            self.assertIn("非空", stderr.getvalue())
+            self.assertEqual((output / "report.json").read_bytes(), before)
+
+    def test_git_state_uses_one_schema_with_or_without_git(self):
+        self.assertIn("tracked_source_changes", git_state())
+        with patch("tools.evaluate_lowlight.subprocess.run", side_effect=OSError("no git")):
+            self.assertEqual(git_state(), {"commit": None, "tracked_source_changes": None})
 
 
 if __name__ == "__main__":
