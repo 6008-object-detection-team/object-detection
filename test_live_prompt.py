@@ -97,6 +97,21 @@ class DebouncedPromptTests(unittest.TestCase):
         stop.assert_called_once()
         self.assertEqual(self.worker.assigned, [])
 
+    def test_next_image_within_the_pause_runs_with_the_new_prompt(self):
+        window = self.window
+        window.worker = None  # the previous image finished; the request is kept for navigation
+        window.image_paths, window.image_index = ["a.jpg", "b.jpg"], 0
+        window.active_detection_request.update(template=None)
+        with patch.object(window, "_start_stream") as start, patch.object(window, "_update_image_position"):
+            window.prompt_input.setText("cup")
+            self.assertTrue(window.prompt_apply_timer.isActive())
+            window.next_image()  # within 400 ms of the last key
+            self.assertFalse(window.prompt_apply_timer.isActive())
+            self.wait_past_debounce()
+        start.assert_called_once()
+        self.assertEqual(start.call_args.args[1], ["cup"])
+        self.assertEqual(window.active_detection_request["prompts"], ["cup"])
+
     def test_explicit_text_argument_still_applies_immediately(self):
         QTest.keyClicks(self.window.prompt_input, "bag")
         self.window.update_worker_classes("bottle")

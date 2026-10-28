@@ -225,6 +225,9 @@ class AIApp(QMainWindow):
     def _move_image(self, offset):
         if len(self.image_paths) < 2:
             return
+        if self.prompt_apply_timer.isActive():
+            # A prompt typed within the debounce pause must apply to the next image too.
+            self.update_worker_classes()
         request = self.active_detection_request
         if self.worker and not self._stop_input(clear_request=False):
             return
