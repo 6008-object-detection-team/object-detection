@@ -293,7 +293,7 @@ MP4 无音轨。摄像头录像用重复处理帧保持源时间轴，重复帧�
 
 它们用于功能与开发诊断，不是未见最终测试或完整 COCO 榜单。工具存在不代表训练已执行；本轮没有运行新训练。数据用途见 [数据说明](docs/dataset.md)。
 
-tools/evaluate_lowlight.py 在上述三组人工标注图上做合成暗光对照（原图 / 暗图 / 旧 CLAHE / 自适应 / 双路径），见 [暗光定量评价](docs/LOWLIGHT_EVAL.md)；训练探针图只训练过独立探针模型，对零样本 YOLOE 权重仍是未见图片。evaluate_mini_dataset.py 提供文本、文本 + SAHI、SAVPE、SAVPE + SAHI 的人工 GT 评价；benchmark_detection.py 分别改变置信度或最大框数，避免把两个变量联动。没有人工标注时，框数与耗时不能称为准确率或召回率。见 [评价流程](docs/evaluation.md) 和 [参数实验](docs/experiments.md)。
+tools/evaluate_lowlight.py 在上述三组人工标注图上做合成暗光对照（原图 / 暗图 / 旧 CLAHE / 自适应 / 双路径），见 [暗光定量评价](docs/LOWLIGHT_EVAL.md)；训练探针图只训练过独立探针模型，对零样本 YOLOE 权重仍是未见图片。evaluate_mini_dataset.py 提供文本、文本 + SAHI、SAVPE、SAVPE + SAHI 的人工 GT 评价：文本模式仍用 `--conf`（默认 0.05）计算 AP；SAVPE 单参考分数低一个数量级，0.05 会截掉 24 图诊断集上 40 个真阳性里的 36 个，视觉模式改用 `--visual-conf`（默认 0.001）；另外两种模式都按界面默认阈值 `--gui-conf`（默认 0.40，IoU 0.50）统计精确率 / 召回率 / F1，写进 `report.json`/`comparison.csv`。`--annotations`/`--images` 可指向另一组人工标注数据（例如留出的 240 图 10 类子集）评测，只跑文本模式时不需要独立参考文件。benchmark_detection.py 分别改变置信度或最大框数，避免把两个变量联动。没有人工标注时，框数与耗时不能称为准确率或召回率。见 [评价流程](docs/evaluation.md) 和 [参数实验](docs/experiments.md)。
 
 pan_deng/ 保留 Pan Deng 的 240 图评价、阈值 / 框数扫描和绘图工具。旧 token 打分 DINO 与当前 GUI 的后处理配置不同，旧 AP 不能直接当作新 GUI AP。
 
