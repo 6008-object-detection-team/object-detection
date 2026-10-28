@@ -4,14 +4,15 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, QThread, Signal, QSignalBlocker
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
+from PySide6.QtCore import QCoreApplication, QThread, Qt, Signal, QSignalBlocker
+from PySide6.QtGui import QColor, QKeySequence, QShortcut
+from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
     QComboBox, QCheckBox, QListWidget, QProgressBar, QDoubleSpinBox, QSplitter)
 
 from app_utils import parse_prompts
-from auto_annotation import (AnnotationSession, detect_candidates, export_coco, export_yolo,
-                             read_image_with_sha, weights_sha256)
+from auto_annotation import (AnnotationSession, delete_session_file, detect_candidates, export_coco,
+                             export_yolo, read_image_with_sha, read_session_file, session_cache_path,
+                             weights_sha256, write_session)
 from engines import PromptFreeEngine
 from feedback_ui import CorrectionCanvas
 from prompt_modes import resolve_detection_model
@@ -380,6 +381,45 @@ class AutoAnnotationPanel(QWidget):
                 count=unreviewed)) == QMessageBox.Yes
         return True
 
+    # Session auto-save / resume (C2) --------------------------------------
+    def _maybe_resume(self, session, folder):
+        """Offer to restore a previously saved review session for *folder*."""
+        try:
+            data = read_session_file(session_cache_path(folder))
+        except ValueError as exc:
+            self.notify(message("已忽略损坏的标注进度文件：{error}", error=exception_message(exc)))
+            return session
+        if not data:
+            return session
+        reviewed = sum(1 for raw in data.get("entries", [])
+                       if isinstance(raw, dict) and (raw.get("state") not in (None, "pending") or raw.get("detected")))
+        if not reviewed:
+            return session
+        if QMessageBox.question(self, "恢复标注进度", message(
+                "检测到本文件夹上次自动标注保存的审核进度（约 {count} 张已审核或已检测），是否恢复？"
+                "图片内容发生变化的会重新标为待审，不会沿用旧候选框。", count=reviewed)) != QMessageBox.Yes:
+            return session
+        try:
+            resumed = AnnotationSession.from_dict(data, folder, recursive=session.recursive)
+        except ValueError as exc:
+            self.notify(message("恢复失败，已忽略进度文件：{error}", error=exception_message(exc)))
+            return session
+        if resumed.changed_count:
+            self.notify(message("已恢复 {restored} 张图片的审核进度；{changed} 张图片内容已变化，重新标为待审。",
+                                restored=resumed.restored_count, changed=resumed.changed_count))
+        else:
+            self.notify(message("已恢复 {restored} 张图片的审核进度。", restored=resumed.restored_count))
+        return resumed
+
+    def _autosave(self):
+        """Persist the review session after each human decision; never blocks review."""
+        if self.session is None:
+            return
+        try:
+            write_session(self.session)
+        except OSError as exc:
+            self.notify(message("标注进度未能保存：{error}", error=exception_message(exc)))
+
     def load_folder(self, folder):
         if self.running or not self.may_discard():
             return False
@@ -391,6 +431,7 @@ class AutoAnnotationPanel(QWidget):
         if not len(session):
             self.notify(message("所选文件夹中没有 JPG、JPEG、PNG 或 BMP 图片。"))
             return False
+        session = self._maybe_resume(session, folder)
         self.session, self.current = session, -1
         session.set_classes(parse_prompts(self.class_input.text()))
         self._bind(self.folder_label, message("{folder}（{count} 张图片）", folder=str(session.folder), count=len(session)))
@@ -661,6 +702,7 @@ class AutoAnnotationPanel(QWidget):
         self.rebuild_boxes()
         self.update_summary()
         self.update_controls()
+        self._autosave()
 
     def _next_pending(self, start):
         entries = self.session.entries
@@ -677,6 +719,7 @@ class AutoAnnotationPanel(QWidget):
         if following >= 0 and following != index:
             self.image_list.setCurrentRow(following)
         self.update_controls()
+        self._autosave()
 
     def accept_current(self):
         if self.entry() is None:
@@ -708,6 +751,7 @@ class AutoAnnotationPanel(QWidget):
         self.rebuild_boxes()
         self.update_summary()
         self.update_controls()
+        self._autosave()
 
     def bulk_accept(self):
         if self.session is None or self.running:
@@ -729,12 +773,14 @@ class AutoAnnotationPanel(QWidget):
             self.rebuild_boxes()
         self.update_summary()
         self.update_controls()
+        self._autosave()
         self.notify(message("已批量接受 {count} 张图片（阈值 {score:.2f}）。", count=accepted, score=threshold))
 
     # Export --------------------------------------------------------------
     def export(self, fmt):
         if self.session is None or self.running:
             return
+        exported = False
         try:
             self.apply_class_order()
             parent = QFileDialog.getExistingDirectory(
@@ -744,6 +790,7 @@ class AutoAnnotationPanel(QWidget):
             self._export_parent = parent
             target = Path(parent) / f"auto_labels_{fmt}_{datetime.now():%Y%m%d_%H%M%S}"
             result = (export_yolo if fmt == "yolo" else export_coco)(self.session, target, self.min_score.value())
+            exported = True
             values = dict(format=fmt.upper(), images=result["images"], boxes=result["boxes"],
                           classes=len(result["classes"]), path=str(result["path"]))
             if result["skipped"]:
@@ -753,5 +800,17 @@ class AutoAnnotationPanel(QWidget):
                 self.notify(message("已导出 {format}：{images} 张图片、{boxes} 个框、{classes} 个类别 → {path}", **values))
         except Exception as exc:
             self.notify(message("导出未完成：{error}", error=exception_message(exc)))
+        if exported:
+            self._offer_clear_progress(fmt)
         self.update_summary()
         self.update_controls()
+
+    def _offer_clear_progress(self, fmt):
+        """After a successful export, let the user drop the saved review progress."""
+        path = session_cache_path(self.session.folder)
+        if not path.is_file():
+            return
+        if QMessageBox.question(self, "清除本地进度", message(
+                "已导出 {format}。是否清除本地保存的审核进度文件？清除后关闭或重开文件夹不会再提供恢复。",
+                format=fmt.upper())) == QMessageBox.Yes:
+            delete_session_file(self.session.folder, path)
