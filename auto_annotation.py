@@ -201,15 +201,21 @@ class AnnotationSession:
             self.classes.append(name)
 
     def rename_class(self, old, new):
-        """Rename in every reviewed box and the class list; candidates stay as predicted."""
+        """Rename in every reviewed box and the class list; candidates stay as predicted.
+
+        Only images that had a box renamed change state. A bulk-accepted image
+        stays a bulk acceptance: a class rename is not a person looking at it.
+        """
         new = normalize_box({"label": new, "xyxy": [0, 0, 1, 1]})["label"]
         changed = 0
         for entry in self.entries:
+            renamed = 0
             for box in entry.boxes:
                 if box["label"] == old:
                     box["label"] = new
-                    changed += 1
-            if entry.exported:
+                    renamed += 1
+            changed += renamed
+            if renamed and entry.exported and entry.review_method != "bulk_min_score":
                 entry.state = "edited" if entry.modified else "accepted"
         self.classes = list(dict.fromkeys(new if name == old else name for name in self.classes))
         self.dirty = self.dirty or changed > 0

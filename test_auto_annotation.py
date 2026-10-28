@@ -202,6 +202,19 @@ class SessionStateTests(unittest.TestCase):
         self.assertEqual(session.entries[0].candidates[0]["label"], "bottle")
         self.assertEqual(session.labels_in_use(), ["water bottle", "cup"])
 
+    def test_rename_keeps_state_of_images_without_that_class_and_of_bulk_acceptances(self):
+        session = detected_session(self.folder, 3)
+        self.assertEqual(session.bulk_accept(0.5), 3)  # the 0.3 cup is trimmed: boxes != candidates
+        session.reset(2)
+        self.assertEqual(session.accept(2), "accepted")  # opened and accepted unchanged
+        self.assertEqual(session.rename_class("phone", "cell phone"), 0)
+        self.assertEqual([(entry.state, entry.review_method) for entry in session.entries],
+                         [("accepted", "bulk_min_score")] * 2 + [("accepted", "per_image")])
+        self.assertEqual(session.rename_class("bottle", "jar"), 3)
+        self.assertEqual([(entry.state, entry.review_method) for entry in session.entries],
+                         [("accepted", "bulk_min_score")] * 2 + [("edited", "per_image")])
+        self.assertEqual([box["label"] for box in session.entries[0].boxes], ["jar"])
+
 
 class ExportTests(unittest.TestCase):
     def setUp(self):
