@@ -44,7 +44,7 @@ $env:HF_HUB_OFFLINE='1'
 .\run_app.bat --check --dino
 ```
 
-默认缓存是项目 `.cache/huggingface/`。未准备 DINO 时不应启用离线模式来做首次下载。只有百余字节的 Git LFS 文本指针不是权重；下载脚本能够用实际二进制替换指针，不需要还原历史 build。
+默认缓存是项目 `.cache/huggingface/`。未准备 DINO 时不应启用离线模式来做首次下载。只有百余字节的 Git LFS 文本指针不是权重；下载脚本能够用实际二进制替换指针，不需要还原历史 build。`--check` 把 YOLOE-26S、26S-PF 和 MobileCLIP2 视为必需（缺失时报 ERROR、退出码 1），其它权重和可选包缺失只报 WARN；界面模型列表会把只有指针或缺失的权重标为“（未下载）”。
 
 ## 系统差异与限制
 

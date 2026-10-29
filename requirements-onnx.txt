@@ -1,0 +1,8 @@
+# Optional: ONNX export (tools/export_onnx.py) and the PyTorch / ONNX Runtime benchmark
+# (tools/benchmark_onnx.py). Install requirements.txt and one PyTorch backend first;
+# requirements.txt already provides the CPU onnxruntime that runs the exported graph.
+# Ultralytics auto-install is disabled by the export tool, so these must be present.
+# Verified 2026-10-28: onnx 1.23.2, onnxslim 0.1.98, onnxruntime 1.31.1 (CPUExecutionProvider).
+# onnxruntime-gpu / TensorRT are not verified in this project.
+onnx>=1.12.0,<2
+onnxslim>=0.1.82

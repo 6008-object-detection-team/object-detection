@@ -87,9 +87,11 @@ class VisualPromptEngine(OpenVocabEngine):
         self.reference_shape = None
         self._visual_signature = None
 
-    def load_model(self, model_path, device="CPU"):
+    def load_model(self, model_path, device="CPU", graph="seg"):
+        """Same graph choice as OpenVocabEngine (``"det"`` = detection branch only), so tools that
+        build a visual engine directly can opt in too; the app hands over from a text engine."""
         self.release_visual_prompt()
-        return super().load_model(model_path, device)
+        return super().load_model(model_path, device, graph=graph)
 
     def release_visual_prompt(self):
         """Remove visual state before handing the checkpoint back to text mode."""
@@ -98,6 +100,7 @@ class VisualPromptEngine(OpenVocabEngine):
         self.reference_box = self.reference_shape = self._visual_signature = None
         self.current_classes = []
         if self.model is not None and was_visual:
+            had_predictor = self.model.predictor is not None
             self.model.predictor = None
             underlying = self.model.model
             if hasattr(underlying, "pe"):
@@ -105,6 +108,8 @@ class VisualPromptEngine(OpenVocabEngine):
             # YOLOE.set_classes skips text encoding when names are unchanged.
             # Clearing names ensures visual "bottle" -> text "bottle" re-encodes.
             underlying.names = {}
+            if had_predictor:
+                self._release_dropped_predictor()
 
     def unload(self):
         self.release_visual_prompt()
@@ -169,7 +174,11 @@ class VisualPromptEngine(OpenVocabEngine):
                     embedding = self._encode_visual_prompt(contiguous, box_xyxy, reference_mask)
             # Explicit embeddings bypass get_text_pe even when labels coincide.
             cached_embedding = embedding.detach().cpu().clone()
+            had_predictor = self.model.predictor is not None
             self.model.set_classes([label], embedding)
+            if had_predictor and self.model.predictor is None:
+                # The previous text or visual predictor is now unreferenced.
+                self._release_dropped_predictor()
             self.visual_embedding = cached_embedding
             self.visual_label = label
             self.current_classes = [label]

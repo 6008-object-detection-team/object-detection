@@ -16,6 +16,74 @@ from live_video import (CameraReader, CameraRecordingTimeline, DisplayFrame,
                         LatestFrameMailbox)
 
 IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"})
+# "default" keeps the historical requests; "mjpg" is opt-in (see configure_camera).
+CAMERA_FORMATS = ("default", "mjpg")
+MJPG_DRIVER_BUFFERS = 4
+
+
+def fourcc_text(value):
+    """Four printable characters from a CAP_PROP_FOURCC value, else None."""
+    try:
+        code = int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    text = "".join(chr((code >> (8 * shift)) & 0xFF) for shift in range(4))
+    return text if code > 0 and text.isascii() and text.isprintable() else None
+
+
+def configure_camera(capture, camera_format="default"):
+    """Apply the camera requests and read back what the driver negotiated.
+
+    ``default`` sends the app's original requests unchanged: one driver
+    buffer, 1280x720 and the driver's own pixel format. ``mjpg`` requests MJPG
+    before the frame size (V4L2 and DirectShow negotiate sizes per format) and
+    keeps a 4-buffer driver queue: with a single buffer the measured webcam
+    delivered only every second MJPG frame. The latest-frame reader already
+    discards stale frames, so extra driver buffers do not queue old frames.
+    If the driver refuses MJPG, the default requests apply and the result
+    says so; nothing is retried or reopened.
+    """
+    if camera_format not in CAMERA_FORMATS:
+        raise ValueError(message("未知摄像头格式：{value}", value=str(camera_format)))
+    mjpg = False
+    if camera_format == "mjpg":
+        capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        mjpg = fourcc_text(capture.get(cv2.CAP_PROP_FOURCC)) == "MJPG"
+    capture.set(cv2.CAP_PROP_BUFFERSIZE, MJPG_DRIVER_BUFFERS if mjpg else 1)
+    # Keep capture buffers modest; SAHI can enlarge local details.
+    capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    if mjpg and fourcc_text(capture.get(cv2.CAP_PROP_FOURCC)) != "MJPG":
+        # The driver accepted MJPG but switched format for this frame size: the result says
+        # "default settings", so the driver queue goes back to the default single buffer too.
+        capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    def number(prop):
+        try:
+            value = float(capture.get(prop))
+        except (TypeError, ValueError):
+            return None
+        return value if np.isfinite(value) and value > 0 else None
+
+    fourcc = fourcc_text(capture.get(cv2.CAP_PROP_FOURCC))
+    return {"requested": camera_format, "fourcc": fourcc, "width": number(cv2.CAP_PROP_FRAME_WIDTH),
+            "height": number(cv2.CAP_PROP_FRAME_HEIGHT), "fps": number(cv2.CAP_PROP_FPS),
+            "buffers": number(cv2.CAP_PROP_BUFFERSIZE),
+            "mjpg_refused": camera_format == "mjpg" and fourcc != "MJPG"}
+
+
+def camera_status(info):
+    """Status-bar text for the negotiated camera format (values are data)."""
+    def shown(value):
+        return "?" if value is None else f"{value:.0f}"
+
+    text = message("摄像头 {fourcc} {width}×{height} {fps} FPS，缓冲 {buffers}",
+                   fourcc=info.get("fourcc") or "?", width=shown(info.get("width")),
+                   height=shown(info.get("height")), fps=shown(info.get("fps")),
+                   buffers=shown(info.get("buffers")))
+    if info.get("mjpg_refused"):
+        return message("{camera}（摄像头未接受 MJPG，已按默认设置运行）", camera=text)
+    return text
 
 
 def read_image_file(path):
@@ -35,8 +103,12 @@ class VideoWorker(QThread):
     info_signal = Signal(object)
     status_signal = Signal(object)
 
-    def __init__(self, engine, enhancer, source=0, source_kind=None, recording_path=None):
+    def __init__(self, engine, enhancer, source=0, source_kind=None, recording_path=None,
+                 camera_format="default"):
         super().__init__()
+        if camera_format not in CAMERA_FORMATS:
+            raise ValueError(message("未知摄像头格式：{value}", value=str(camera_format)))
+        self.camera_format, self.camera_info = camera_format, None
         self.engine, self.enhancer, self.source = engine, enhancer, source
         if source_kind is None:
             source_kind = "camera" if isinstance(source, int) else (
@@ -155,6 +227,8 @@ class VideoWorker(QThread):
         self._camera_reader = reader
         writer = timeline = None
         started = False
+        # Read back once before streaming; shown with every result.
+        camera_text = camera_status(self.camera_info) if self.camera_info else None
         try:
             fps = self._capture_fps(capture)
             reader.start()
@@ -171,7 +245,9 @@ class VideoWorker(QThread):
                 frame = packet.image
                 if not preview_sent:
                     self.frame_ready.emit(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                    self.status_signal.emit(message("摄像头已连接，正在预热模型（最新帧模式）…"))
+                    connected = message("摄像头已连接，正在预热模型（最新帧模式）…")
+                    self.status_signal.emit(connected if camera_text is None else
+                                            message("{status} | {camera}", status=connected, camera=camera_text))
                     preview_sent = True
                 inference_started = time.perf_counter()
                 output, _, status = self._infer(frame)
@@ -186,6 +262,8 @@ class VideoWorker(QThread):
                     self.recorded_frames = timeline.written
                     status = message("{status} | 录像 {frames} 帧（重复 {repeated}）",
                                      status=status, frames=timeline.written, repeated=timeline.repeated)
+                if camera_text is not None:
+                    status = message("{status} | {camera}", status=status, camera=camera_text)
                 captured, dropped = reader.mailbox.counters()
                 display = DisplayFrame(cv2.cvtColor(output, cv2.COLOR_BGR2RGB),
                                        packet.read_at, inference_started, inference_finished,
@@ -249,10 +327,7 @@ class VideoWorker(QThread):
                 self.error_signal.emit(message("无法连接视频源：{source}\n请检查摄像头是否被其他程序占用。", source=self.source))
                 return
             if self.source_kind == "camera":
-                capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                # Keep capture buffers modest; SAHI can enlarge local details.
-                capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                self.camera_info = configure_camera(capture, self.camera_format)
                 camera_capture, capture = capture, None
                 self._run_camera(camera_capture)
                 return

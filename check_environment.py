@@ -1,40 +1,100 @@
-"""Check installed dependencies and the local weights without opening the UI."""
+"""Check installed dependencies and the local weights without opening the UI.
+
+Required items (ERROR, exit code 1) are what the default app needs: the
+packages in requirements.txt plus a PyTorch backend, YOLOE-26S, its official
+prompt-free sibling and the MobileCLIP2 text encoder used by YOLOE-26. The
+other models and optional packages only print WARN lines.
+"""
 import argparse
 import importlib
+import importlib.metadata
 import os
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 from prompt_modes import PROMPT_FREE_PAIRS
+from tools.fetch_models import weight_state
+
+# import name -> distribution name used for the printed version
+REQUIRED_PACKAGES = {"numpy": "numpy", "scipy": "scipy", "cv2": "opencv-python", "onnxruntime": "onnxruntime",
+                     "PySide6": "PySide6", "torch": "torch", "torchvision": "torchvision",
+                     "ultralytics": "ultralytics", "lap": "lap", "psutil": "psutil", "clip": "clip"}
+OPTIONAL_PACKAGES = {
+    "sahi": ("sahi", "SAHI slicing and mini-dataset evaluation (requirements-evaluation.txt)"),
+    "pycocotools": ("pycocotools", "COCO AP evaluation (requirements-evaluation.txt)"),
+    "onnx": ("onnx", "ONNX export (requirements-onnx.txt)"),
+    "onnxslim": ("onnxslim", "ONNX export (requirements-onnx.txt)"),
+    "transformers": ("transformers", "Grounding DINO comparison (requirements-dino.txt)"),
+}
+REQUIRED_MODELS = ("yoloe-26s-seg.pt", "yoloe-26s-seg-pf.pt", "mobileclip2_b.ts")
+OPTIONAL_MODELS = tuple(name for name in (*PROMPT_FREE_PAIRS, *PROMPT_FREE_PAIRS.values(), "mobileclip_blt.ts")
+                        if name not in REQUIRED_MODELS)
+STATE_TEXT = {"missing": "missing", "lfs_pointer": "Git LFS pointer, not downloaded",
+              "incomplete": "under 1 MiB, incomplete download"}
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def package_version(name, distribution):
+    """Import the module (a broken install fails here) and report its version."""
+    module = importlib.import_module(name)
+    if name == "clip" and not callable(getattr(module, "tokenize", None)):
+        raise RuntimeError("Install the ultralytics/CLIP dependency from requirements.txt")
+    version = getattr(module, "__version__", None)
+    if version is None:
+        try:
+            version = importlib.metadata.version(distribution)
+        except importlib.metadata.PackageNotFoundError:
+            version = "installed"
+    return str(version)
+
+
+def check_packages():
+    """(lines, errors, warnings) for required and optional packages."""
+    lines, errors, warnings = [], [], []
+    for name, distribution in REQUIRED_PACKAGES.items():
+        try:
+            lines.append(f"OK {name}: {package_version(name, distribution)}")
+        except Exception as exc:
+            errors.append(f"{name}: {exc}")
+    for name, (distribution, purpose) in OPTIONAL_PACKAGES.items():
+        try:
+            lines.append(f"OK {name} (optional): {package_version(name, distribution)}")
+        except Exception as exc:
+            warnings.append(f"{name} (optional, {purpose}): {type(exc).__name__}: {exc}")
+    return lines, errors, warnings
+
+
+def check_models(root=ROOT):
+    """(lines, errors, warnings): required weights are errors, the others warnings."""
+    lines, errors, warnings = [], [], []
+    for names, problems, kind in ((REQUIRED_MODELS, errors, "required"), (OPTIONAL_MODELS, warnings, "optional")):
+        for name in names:
+            path = Path(root) / name
+            state = weight_state(path)
+            if state == "ok":
+                lines.append(f"OK {name} ({kind}): {path.stat().st_size:,} bytes")
+            else:
+                problems.append(f"{name} ({kind}): {STATE_TEXT[state]}; run python tools/fetch_models.py --models {name}")
+    return lines, errors, warnings
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dino", action="store_true", help="also check DINO dependencies and cached weights")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if sys.platform == "win32":
         dll_dir = Path(sys.prefix) / "Library" / "bin"
         if dll_dir.is_dir():
             dll_handle = os.add_dll_directory(str(dll_dir))
     (ROOT / ".ultralytics").mkdir(exist_ok=True)
     os.environ.setdefault("YOLO_CONFIG_DIR", str(ROOT / ".ultralytics"))
-    errors = []
     print(f"Python: {sys.executable} ({sys.version.split()[0]})")
-    for name in ("numpy", "cv2", "onnxruntime", "PySide6", "torch", "torchvision", "ultralytics", "lap", "clip"):
-        try:
-            module = importlib.import_module(name)
-            if name == "clip" and not callable(getattr(module, "tokenize", None)):
-                raise RuntimeError("Install the ultralytics/CLIP dependency from requirements.txt")
-            print(f"OK {name}: {getattr(module, '__version__', 'installed')}")
-        except Exception as exc:
-            errors.append(f"{name}: {exc}")
-    for name in (*PROMPT_FREE_PAIRS, "mobileclip_blt.ts", "mobileclip2_b.ts", *PROMPT_FREE_PAIRS.values()):
-        path = ROOT / name
-        if not path.is_file() or path.stat().st_size < 1024 * 1024:
-            errors.append(f"{name}: missing or a Git LFS pointer; run python tools/fetch_models.py --all")
-        else:
-            print(f"OK {name}: {path.stat().st_size:,} bytes")
+    package_lines, errors, warnings = check_packages()
+    model_lines, model_errors, model_warnings = check_models()
+    errors += model_errors
+    warnings += model_warnings
+    for line in package_lines + model_lines:
+        print(line)
     if "torch" in sys.modules:
         print(f"CUDA available: {sys.modules['torch'].cuda.is_available()} (CPU also supported)")
         if sys.modules['torch'].cuda.is_available():
@@ -53,9 +113,17 @@ def main():
             print(f"OK Grounding DINO: {weights}")
         except Exception as exc:
             errors.append(f"Grounding DINO: {exc}")
+    for warning in warnings:
+        print(f"WARN {warning}")
     for error in errors:
         print(f"ERROR {error}")
-    print("Environment and model files are ready." if not errors else "Fix the errors above before starting.")
+    if errors:
+        print("Fix the errors above before starting.")
+    elif warnings:
+        print(f"Required packages and models are ready; {len(warnings)} optional item(s) are missing (WARN lines). "
+              "The app marks undownloaded models as '(not downloaded)'.")
+    else:
+        print("Environment and model files are ready.")
     return 1 if errors else 0
 
 

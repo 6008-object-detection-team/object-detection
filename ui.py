@@ -1,10 +1,20 @@
 """Reusable Qt widgets and layout construction for the detector UI."""
-import cv2
 from PySide6.QtCore import Qt, QPoint, QRect
-from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QHBoxLayout,
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout,
                                QLabel, QLineEdit, QPushButton, QSlider,
                                QScrollArea, QSpinBox, QTabWidget, QVBoxLayout, QWidget)
+
+from i18n import message
+from ui_language import QMessageBox
+from video_worker import read_image_file
+
+# Single-reference SAVPE scores sit far below text-prompt scores, so visual prompts
+# get their own threshold; text / prompt-free keep the global slider (0.40). Held-out
+# 240-image COCO subset, human GT, app path, 1 reference per class (docs/VISUAL_PROMPT.md):
+# 0.40 -> P 0.979 / R 0.027; 0.03 -> P 0.735 / R 0.337 / F1 0.463. F1 peaks near
+# 0.01-0.02 with lower precision; 0.03 leans towards precision.
+VISUAL_PROMPT_CONF = 0.03
 
 
 class DrawableLabel(QLabel):
@@ -20,10 +30,28 @@ class DrawableLabel(QLabel):
         self.setStyleSheet("background:#2b2b2b; color:white; border:1px solid #555;")
 
     def set_image(self, path):
-        self.raw_image = cv2.imread(path)
-        self.original_pixmap = QPixmap(path) if self.raw_image is not None else None
+        """Decode a reference like every other image input; on failure keep the old one.
+
+        read_image_file reads bytes with NumPy (non-ASCII Windows paths) and
+        decodes them with OpenCV, which applies EXIF orientation. The pixmap is
+        built from that same BGR array, the one get_visual_prompt hands to the
+        encoder, so a box drawn on screen covers the pixels the user saw.
+        QPixmap(path) ignored EXIF orientation, so rotated phone photos were
+        shown unrotated while a rotated array was encoded.
+        """
+        image = read_image_file(path)
+        if image is None:
+            QMessageBox.warning(self, "无法读取参考图片", message(
+                "无法读取参考图片：{path}\n请检查文件是否损坏或格式是否受支持；当前参考图保持不变。", path=str(path)))
+            return False
+        height, width = image.shape[:2]
+        rgb = image[..., ::-1].copy()
+        self.raw_image = image
+        self.original_pixmap = QPixmap.fromImage(
+            QImage(rgb.data, width, height, rgb.strides[0], QImage.Format_RGB888).copy())
         self.start_pt, self.end_pt, self.box = QPoint(), QPoint(), None
         self.update()
+        return True
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -131,6 +159,13 @@ def build_ui(app):
     for title, path in app.MODELS.items():
         app.model_combo.addItem(title, path)
     app.device_combo = QComboBox(); app.device_combo.addItems(["CPU", "CUDA"])
+    app.detection_branch_checkbox = QCheckBox("仅加载检测分支（不生成掩膜）")
+    app.detection_branch_checkbox.setChecked(True)
+    app.detection_branch_checkbox.setToolTip("本程序只画框、不画掩膜。勾选时把分割权重逐张量原样复制到同规格的检测结构，去掉掩膜分支，检测框与完整模型相同；核对不通过时保留完整分割模型并在状态栏说明。取消勾选则加载完整分割模型。无提示模型始终加载完整模型；下次加载模型时生效。")
+    app.camera_format_combo = QComboBox()
+    app.camera_format_combo.addItem("驱动默认（1 缓冲，原有设置）", "default")
+    app.camera_format_combo.addItem("MJPG（4 缓冲，需摄像头支持）", "mjpg")
+    app.camera_format_combo.setToolTip("仅对摄像头输入有效，下次开始检测时生效。MJPG 在本机 720p 摄像头上把输入从约 10 FPS 提高到约 30 FPS，但 CPU 占用更高；摄像头不支持时按默认设置运行。状态栏显示驱动实际协商的格式、分辨率、帧率和缓冲数。")
     app.source_combo = QComboBox()
     for title, kind in [
         ("本地摄像头 (Camera 0)", "camera"),
@@ -186,7 +221,7 @@ def build_ui(app):
     apply_button = QPushButton("应用设置 / 加载模型"); apply_button.clicked.connect(app.apply_settings)
     release_button = QPushButton("停止并释放模型 / 显存"); release_button.clicked.connect(app.release_model)
     release_button.setToolTip("先等待当前推理结束，再释放权重和 GPU 使用锁，允许运行评价脚本。")
-    for title, widget in [("检测模型:", app.model_combo), ("运行设备:", app.device_combo), ("推理分辨率:", app.resolution_combo), ("", app.sahi_checkbox), ("SAHI 切片尺寸（重叠 20%，上限 9 块）:", app.slice_size_combo), ("", app.tile_checkbox), ("输入源：", app.source_combo), ("", app.file_path_label), ("", app.image_navigation), ("置信度阈值（筛选门槛）:", app.conf_value), ("", app.conf_slider), ("最大预测框数（独立变量）:", app.max_det_spin), ("", app.record_checkbox), ("", app.record_path_input), ("", app.record_path_button), ("", app.dce_checkbox), ("暗光处理方式:", app.dark_mode_combo), ("增强强度:", app.strength_value), ("", app.strength_slider), ("", apply_button), ("", release_button)]:
+    for title, widget in [("检测模型:", app.model_combo), ("运行设备:", app.device_combo), ("", app.detection_branch_checkbox), ("推理分辨率:", app.resolution_combo), ("", app.sahi_checkbox), ("SAHI 切片尺寸（重叠 20%，上限 9 块）:", app.slice_size_combo), ("", app.tile_checkbox), ("输入源：", app.source_combo), ("摄像头格式:", app.camera_format_combo), ("", app.file_path_label), ("", app.image_navigation), ("置信度阈值（筛选门槛）:", app.conf_value), ("", app.conf_slider), ("最大预测框数（独立变量）:", app.max_det_spin), ("", app.record_checkbox), ("", app.record_path_input), ("", app.record_path_button), ("", app.dce_checkbox), ("暗光处理方式:", app.dark_mode_combo), ("增强强度:", app.strength_value), ("", app.strength_slider), ("", apply_button), ("", release_button)]:
         if title: left.addWidget(QLabel(title))
         left.addWidget(widget)
     for signal in [app.conf_slider.valueChanged, app.max_det_spin.valueChanged, app.resolution_combo.currentIndexChanged, app.tile_checkbox.stateChanged, app.sahi_checkbox.stateChanged, app.slice_size_combo.currentIndexChanged, app.dark_mode_combo.currentIndexChanged, app.strength_slider.valueChanged]:
@@ -206,11 +241,18 @@ def build_ui(app):
     tabs = app.tabs = QTabWidget(); root.addWidget(tabs)
     text_tab = QWidget(); text_layout = QVBoxLayout(text_tab); controls = QHBoxLayout()
     app.prompt_input = QLineEdit(); app.prompt_input.setPlaceholderText("留空检测全部词汇；或输入 person, bottle, cup 等目标")
-    app.prompt_input.textChanged.connect(app.update_worker_classes)
+    app.prompt_input.textChanged.connect(lambda _text: app.prompt_apply_timer.start())
+    app.prompt_input.returnPressed.connect(app.update_worker_classes)
+    app.prompt_input.setToolTip("检测运行中修改目标：停止输入约 0.4 秒后应用，按 Enter 立即应用。")
     start = QPushButton("开始检测"); start.clicked.connect(app.start_text_stream)
     stop = QPushButton("关闭检测"); stop.clicked.connect(app.stop_video_stream)
     controls.addWidget(QLabel("检测任意目标:")); controls.addWidget(app.prompt_input); controls.addWidget(start); controls.addWidget(stop)
     correct = QPushButton("纠错当前结果"); correct.clicked.connect(app.open_feedback); controls.addWidget(correct)
+    from compare_ui import open_compare_dialog
+    compare = QPushButton("对比模型…")
+    compare.setToolTip("在当前图片上串行加载并比较两个选定模型（一次只占用一个模型），结果可导出为 PNG。")
+    compare.clicked.connect(lambda: open_compare_dialog(app))
+    controls.addWidget(compare)
     app.prompt_mode_hint = QLabel("留空：真正无提示检测；输入文字：指定目标。切换权重前会停止检测，只加载一个模型。")
     app.prompt_mode_hint.setWordWrap(True)
     app.video_label_tab1 = _video_label(); text_layout.addLayout(controls)
@@ -227,6 +269,13 @@ def build_ui(app):
     reference_layout.addLayout(side); reference_layout.addWidget(app.ref_canvas)
     visual_controls = QHBoxLayout(); visual_start = QPushButton("开始检测（视觉提示词）"); visual_start.clicked.connect(app.start_visual_stream)
     visual_stop = QPushButton("关闭检测"); visual_stop.clicked.connect(app.stop_video_stream)
+    app.visual_conf_spin = QDoubleSpinBox()
+    app.visual_conf_spin.setObjectName("visual_conf")
+    app.visual_conf_spin.setDecimals(3); app.visual_conf_spin.setRange(0.001, 1.0)
+    app.visual_conf_spin.setSingleStep(0.01); app.visual_conf_spin.setValue(VISUAL_PROMPT_CONF)
+    app.visual_conf_spin.setToolTip("只用于视觉提示：本页检测（运行中修改立即生效）和第 4 页“视觉提示”方式（开始时读取并记入清单）。\n文字 / 无提示检测仍使用左侧置信度滑块。\n单张参考的视觉提示分数远低于文字提示，默认 0.03；0.40 只适合重新找到与参考几乎相同的物体。\n调低召回更多、误报也更多。")
+    app.visual_conf_spin.valueChanged.connect(app.update_detection_options)
+    visual_controls.addWidget(QLabel("视觉提示阈值:")); visual_controls.addWidget(app.visual_conf_spin)
     visual_controls.addWidget(visual_start); visual_controls.addWidget(visual_stop)
     visual_correct = QPushButton("纠错当前结果"); visual_correct.clicked.connect(app.open_feedback); visual_controls.addWidget(visual_correct)
     app.video_label_tab2 = _video_label(); visual_layout.addWidget(reference); visual_layout.addLayout(visual_controls); visual_layout.addWidget(app.video_label_tab2, 1)
@@ -234,10 +283,6 @@ def build_ui(app):
     from feedback_ui import FeedbackPanel
     app.feedback_panel = FeedbackPanel(app)
     tabs.addTab(app.feedback_panel, "3. 用户纠错 / 迭代优化")
-    annotation_tab = QWidget()
-    annotation_layout = QVBoxLayout(annotation_tab)
-    annotation_hint = QLabel("自动标注功能仍在开发中，当前页面暂不提供自动标注操作。")
-    annotation_hint.setAlignment(Qt.AlignCenter)
-    annotation_hint.setWordWrap(True)
-    annotation_layout.addWidget(annotation_hint, 1)
-    tabs.addTab(annotation_tab, "4. 自动标注（开发中）")
+    from auto_annotation_ui import AutoAnnotationPanel
+    app.annotation_panel = AutoAnnotationPanel(app)
+    tabs.addTab(app.annotation_panel, "4. 自动标注")

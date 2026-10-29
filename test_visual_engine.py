@@ -147,6 +147,15 @@ class VisualStateTests(unittest.TestCase):
         encode.assert_not_called()
         self.engine.model.set_classes.assert_not_called()
 
+    def test_load_model_forwards_the_graph_choice_after_releasing_visual_state(self):
+        self.engine.visual_embedding = self.embedding
+        for kwargs, graph in (({}, "seg"), ({"graph": "det"}, "det"), ({"graph": "seg"}, "seg")):
+            with self.subTest(kwargs=kwargs), \
+                    patch.object(OpenVocabEngine, "load_model", return_value="SUCCESS") as load:
+                self.assertEqual(self.engine.load_model("yoloe-26s-seg.pt", "CUDA", **kwargs), "SUCCESS")
+                load.assert_called_once_with("yoloe-26s-seg.pt", "CUDA", graph=graph)
+                self.assertIsNone(self.engine.visual_embedding)
+
     def test_drawing_ignores_legacy_colour_filter(self):
         with patch.object(OpenVocabEngine, "draw_detections", return_value=self.reference) as draw:
             self.engine.draw_detections(self.reference, [], np.zeros((5, 5, 3), dtype=np.uint8), self.reference)

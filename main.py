@@ -12,7 +12,7 @@ if sys.platform == "win32":
         _dll_directory = os.add_dll_directory(dll_dir)
 
 import numpy as np
-from PySide6.QtCore import Qt, Slot, QSignalBlocker
+from PySide6.QtCore import Qt, Slot, QSignalBlocker, QTimer
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QMainWindow
 
@@ -27,6 +27,20 @@ from video_worker import IMAGE_SUFFIXES, VideoWorker, read_image_file
 from live_video import DisplayMetrics
 from i18n import message, exception_message
 from ui_language import UiLanguage, QFileDialog, QMessageBox
+from tools.fetch_models import weight_state
+
+PROJECT = Path(__file__).resolve().parent
+WEIGHT_PROBLEMS = {"missing": "文件不存在", "lfs_pointer": "只有 Git LFS 指针文件，权重未下载",
+                   "incomplete": "文件不足 1 MiB，可能未下载完整"}
+
+
+def local_weight_problem(model_path):
+    """None when a local checkpoint looks downloaded; otherwise the reason."""
+    if str(model_path).startswith("IDEA-Research/"):
+        return None
+    path = Path(model_path)
+    state = weight_state(path if path.is_absolute() else PROJECT / path)
+    return None if state == "ok" else message(WEIGHT_PROBLEMS[state])
 
 
 class AIApp(QMainWindow):
@@ -60,8 +74,15 @@ class AIApp(QMainWindow):
         self._feedback_cached = None
         self._feedback_versions = {}
         self.ui_language = UiLanguage(self)
+        # Typing re-encodes the prompt classes once, after a pause, instead of on
+        # every key; Enter applies at once (ui.py). See update_worker_classes.
+        self.prompt_apply_timer = QTimer(self)
+        self.prompt_apply_timer.setSingleShot(True)
+        self.prompt_apply_timer.setInterval(400)
+        self.prompt_apply_timer.timeout.connect(self.update_worker_classes)
         build_ui(self)
         self.ui_language.capture(self)
+        self._mark_missing_models()
         self._update_model_indicator()
         self.ui_language.changed.connect(self._retranslate_dynamic_content)
         import torch
@@ -76,9 +97,25 @@ class AIApp(QMainWindow):
                        for index in range(self.model_combo.count())}
         self.ref_canvas.update()
         self.feedback_panel.retranslate()
+        self.annotation_panel.retranslate()
 
     def show_status(self, value):
         self.ui_language.bind(self.statusBar(), value, "status")
+
+    @staticmethod
+    def _model_title(title, path):
+        """Base-model titles get a translated "(not downloaded)" suffix."""
+        return message("{name}（未下载）", name=message(title)) if local_weight_problem(path) else title
+
+    def _mark_missing_models(self):
+        """Re-check the listed base weights; entries stay selectable and explain themselves."""
+        titles = {path: title for title, path in type(self).MODELS.items()}
+        for index in range(self.model_combo.count()):
+            path = self.model_combo.itemData(index)
+            if path in titles:
+                self.ui_language.bind(self.model_combo, self._model_title(titles[path], path), "itemText", index)
+        self.MODELS = {self.model_combo.itemText(index): self.model_combo.itemData(index)
+                       for index in range(self.model_combo.count())}
 
     def detection_error(self, title, detail, *, critical=False):
         if self._feedback_retest is not None:
@@ -188,6 +225,9 @@ class AIApp(QMainWindow):
     def _move_image(self, offset):
         if len(self.image_paths) < 2:
             return
+        if self.prompt_apply_timer.isActive():
+            # A prompt typed within the debounce pause must apply to the next image too.
+            self.update_worker_classes()
         request = self.active_detection_request
         if self.worker and not self._stop_input(clear_request=False):
             return
@@ -201,9 +241,16 @@ class AIApp(QMainWindow):
                 visual_label=request.get("visual_label", "object"),
             )
 
+    def annotation_busy(self):
+        panel = getattr(self, "annotation_panel", None)
+        return panel is not None and panel.running
+
     def apply_settings(self):
         if self.training_active:
             QMessageBox.warning(self, "训练进行中", "请先等待纠错训练完成或请求停止，不同时加载推理模型。")
+            return
+        if self.annotation_busy():
+            QMessageBox.warning(self, "自动标注进行中", "自动标注与检测共用一个模型、串行运行；请先在第 4 页停止自动标注。")
             return
         if not self.stop_video_stream():
             return
@@ -224,7 +271,19 @@ class AIApp(QMainWindow):
             if sha256_file(model_path) != self._feedback_versions[model_path]["checkpoint_sha256"]:
                 self.detection_error("版本校验失败", "修改版权重校验失败，不加载；请检查日志或重新更新修改版。")
                 return False
+        if model_path not in self._feedback_versions and model_path not in PROMPTED_PAIRS:
+            # Prompt-free weights are checked against model_sources.json by their engine.
+            problem = local_weight_problem(model_path)
+            if problem is not None:
+                self._mark_missing_models()
+                name = Path(model_path).name
+                detail = message("{name} 未下载（{reason}），没有加载或替换任何模型。请运行 python tools/fetch_models.py --models {name}，完成后再点击“应用设置 / 加载模型”。",
+                                 name=name, reason=problem)
+                self.show_status(detail)
+                self.detection_error("模型未下载", detail)
+                return False
         device = self.device_combo.currentText()
+        graph = "det" if self.detection_branch_checkbox.isChecked() else "seg"
         engine = (PromptFreeEngine() if model_path in PROMPTED_PAIRS else
                   GroundingDINOEngine() if model_path.startswith("IDEA-Research/") else OpenVocabEngine())
         self.show_status(message("正在加载模型：{path}（先释放旧模型，不改变运行设备）…", path=model_path))
@@ -239,7 +298,9 @@ class AIApp(QMainWindow):
             import torch
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            status = engine.load_model(model_path, device)
+            # Only text/visual YOLOE checkpoints have a detection-branch-only graph.
+            status = (engine.load_model(model_path, device, graph=graph) if type(engine) is OpenVocabEngine
+                      else engine.load_model(model_path, device))
         except Exception as exc:
             status = message("模型加载失败：{kind}: {error}", kind=type(exc).__name__, error=exception_message(exc))
         finally:
@@ -250,13 +311,16 @@ class AIApp(QMainWindow):
             self.active_model_sha256 = self._feedback_versions.get(model_path, {}).get("checkpoint_sha256", "")
             self.engine = engine
             self.engine.imgsz = self.resolution_combo.currentData()
+            # Weights fetched while the app runs lose their "(not downloaded)" suffix here.
+            self._mark_missing_models()
             index = self.model_combo.findData(model_path)
             if index >= 0:
                 self.model_combo.blockSignals(True)
                 self.model_combo.setCurrentIndex(index)
                 self.model_combo.blockSignals(False)
             self._update_model_indicator()
-            detail = message("\nDINO 文本阈值固定为 0.25，请使用英文目标提示词。") if isinstance(engine, GroundingDINOEngine) else ""
+            detail = (message("\nDINO 文本阈值固定为 0.25，请使用英文目标提示词。") if isinstance(engine, GroundingDINOEngine)
+                      else self._graph_detail(engine))
             self.show_status(message(
                 "模型已加载：{path}\n推理尺寸：{size}{detail}\n速度和精度以本机测试结果为准。",
                 path=model_path, size=self.engine.imgsz, detail=detail))
@@ -268,6 +332,27 @@ class AIApp(QMainWindow):
             self.detection_error("模型加载失败", status, critical=True)
         self._update_model_indicator()
         return False
+
+    @staticmethod
+    def _graph_detail(engine):
+        """Which graph serves a text/visual checkpoint; empty for other engines."""
+        record = getattr(engine, "model_graph", None) or {}
+        if type(engine) is not OpenVocabEngine or not record:
+            return ""
+        if record.get("graph") == "det":
+            transfer = record.get("transfer", {})
+            return message("\n计算图：仅检测分支（{copied} 个张量与原权重逐一相同，去掉 {removed} 个掩膜分支张量）",
+                           copied=transfer.get("tensors_copied_exactly", "?"),
+                           removed=transfer.get("mask_branch_tensors_removed", "?"))
+        if record.get("fallback"):
+            return message("\n计算图：完整分割模型（仅检测分支未通过核对：{error}）", error=record["fallback"])
+        return message("\n计算图：完整分割模型（设置为不转换）")
+
+    def _wanted_graph(self, path):
+        """The graph setting for a text/visual YOLOE checkpoint; None for PF/DINO."""
+        if path in PROMPTED_PAIRS or str(path).startswith("IDEA-Research/"):
+            return None
+        return "det" if self.detection_branch_checkbox.isChecked() else "seg"
 
     def _update_model_indicator(self):
         if not self.active_model_path or self.engine.model is None:
@@ -303,14 +388,26 @@ class AIApp(QMainWindow):
                 self.show_status(message("修改版当前不可用；不会替换成原版，请检查训练日志。"))
                 return False
         expected_sha = self._feedback_versions.get(path, {}).get("checkpoint_sha256", "")
+        wanted_graph = self._wanted_graph(path)
+        loaded_graph = (getattr(self.engine, "model_graph", None) or {}).get("requested", wanted_graph)
         if self.engine.model is None or self.active_model_path != path or self.engine.device != target_device \
-                or (expected_sha and expected_sha != self.active_model_sha256):
+                or (expected_sha and expected_sha != self.active_model_sha256) \
+                or (wanted_graph is not None and loaded_graph != wanted_graph):
             if not self._load_model_path(path):
                 return False
         self.engine.imgsz = self.resolution_combo.currentData()
         return True
 
-    def update_worker_classes(self, text):
+    def update_worker_classes(self, text=None):
+        """Apply the prompt box to a running text-tab detection.
+
+        Runs when typing pauses (prompt_apply_timer) or on Enter, so a typed
+        word re-encodes the classes and restarts track numbering once, not once
+        per key, and half-typed prompts never reach the model.
+        """
+        self.prompt_apply_timer.stop()
+        if text is None:
+            text = self.prompt_input.text()
         prompts = parse_prompts(text)
         text_active = self.current_video_label is getattr(self, "video_label_tab1", None)
         if text_active and (self.worker or self.active_detection_request):
@@ -339,7 +436,10 @@ class AIApp(QMainWindow):
         self.conf_value.setText(f"{self.conf_slider.value() / 100:.2f}")
         self.strength_value.setText(f"{self.strength_slider.value()}%")
         if self.worker:
-            self.worker.conf = self.conf_slider.value() / 100.0
+            # A visual-prompt run uses the Tab 2 threshold; moving the global
+            # slider during it must not override that (text / PF keep the slider).
+            visual = isinstance(self.engine, VisualPromptEngine)
+            self.worker.conf = self.visual_conf_spin.value() if visual else self.conf_slider.value() / 100.0
             self.worker.max_det = self.max_det_spin.value()
             self.worker.imgsz = self.resolution_combo.currentData()
             self.worker.tiled = self.tile_checkbox.isChecked()
@@ -363,6 +463,8 @@ class AIApp(QMainWindow):
             return
         reference, box = prompt
         label = self.ref_class_input.text().strip() or "object"
+        # _start_stream switches to VisualPromptEngine before update_detection_options,
+        # so the worker starts with the Tab 2 threshold, not the global slider.
         self._start_stream(self.video_label_tab2, [label], visual_reference=reference,
                            visual_box=box, visual_label=label)
 
@@ -389,12 +491,18 @@ class AIApp(QMainWindow):
         replacement.current_classes = []
         self.engine.model = None
         self.engine = replacement
+        # The worker has stopped: free the previous mode's predictor now rather
+        # than when Python's cyclic GC next runs (the visual release does so too).
+        self.engine._discard_predictor()
         self._update_model_indicator()
 
     def _start_stream(self, target_label, prompts, template=None, *, visual_reference=None,
                       visual_box=None, visual_label="object"):
         if self.training_active:
             QMessageBox.warning(self, "训练进行中", "纠错训练和检测串行运行，请先等待训练结束。")
+            return
+        if self.annotation_busy():
+            QMessageBox.warning(self, "自动标注进行中", "自动标注与检测共用一个模型、串行运行；请先在第 4 页停止自动标注。")
             return
         if self.selected_input_kind in {"image", "image_folder"} and not os.path.isfile(str(self.selected_input_source)):
             QMessageBox.warning(self, "图片不可用", "请选择一个存在的图片文件或图片文件夹。")
@@ -420,7 +528,7 @@ class AIApp(QMainWindow):
         worker_kind = "image" if self.selected_input_kind in {"image", "image_folder"} else self.selected_input_kind
         self.worker = VideoWorker(
             self.engine, self.dce_engine, self.selected_input_source, source_kind=worker_kind,
-            recording_path=recording_path,
+            recording_path=recording_path, camera_format=self.camera_format_combo.currentData(),
         )
         self.update_detection_options()
         self.worker.class_names, self.worker.visual_template = prompts, template
@@ -542,7 +650,7 @@ class AIApp(QMainWindow):
         store = self.feedback_panel.store if hasattr(self, "feedback_panel") else FeedbackStore()
         versions = store.model_versions()
         self._feedback_versions = {path: row for _, path, row in versions}
-        entries = list(type(self).MODELS.items())
+        entries = [(self._model_title(title, path), path) for title, path in type(self).MODELS.items()]
         for title, path, row in versions:
             family = row.get("model_family") or model_family(row.get("parent", ""))
             if family:
@@ -644,7 +752,8 @@ class AIApp(QMainWindow):
         return self._stop_input(clear_request=True)
 
     def release_model(self):
-        if not self.stop_video_stream():
+        # Stop-and-release covers every inference worker, including auto-annotation.
+        if not self.annotation_panel.stop_worker() or not self.stop_video_stream():
             return False
         self.engine.unload()
         self.active_model_path = ""
@@ -659,6 +768,9 @@ class AIApp(QMainWindow):
             event.ignore()
             return
         if self.feedback_panel.dirty and not self.feedback_panel.may_replace():
+            event.ignore()
+            return
+        if not self.annotation_panel.may_discard():
             event.ignore()
             return
         if self.release_model():
